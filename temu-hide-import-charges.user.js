@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Temu: mark items with import charges
 // @namespace    https://github.com/JoShMiQueL/violentmonkey-scripts
-// @version      2.9
+// @version      2.10
 // @downloadURL  https://raw.githubusercontent.com/JoShMiQueL/violentmonkey-scripts/master/temu-hide-import-charges.user.js
 // @updateURL    https://raw.githubusercontent.com/JoShMiQueL/violentmonkey-scripts/master/temu-hide-import-charges.user.js
 // @description  On/off switch. When ON, items that ship from outside the EU get a corner warning triangle and their price line shows "price +3,63 → real total" (~3€/item + VAT, per Temu's policy). Cart/mini-cart totals include the fees and Temu's 50% coverage note. Nothing is hidden or removed.
@@ -123,11 +123,21 @@
     const FULL_PRICE_RE = /^\s*€?\s*\d+[.,]\d+\s*€\s*$/;
     // Deepest elements whose WHOLE text is a single price (one per branch —
     // Temu duplicates values for screen readers, so there can be several).
+    // Text of a node ignoring our injected descendants (inline fee, fee line…)
+    // so "5,82€ +3,63€ → 9,45€" still reads as the pure price "5,82€".
+    function cleanText(n) {
+        let t = '';
+        for (const c of n.childNodes) {
+            if (c.nodeType === Node.TEXT_NODE) t += c.textContent;
+            else if (c.nodeType === 1 && !c.matches(SKIP_SEL)) t += cleanText(c);
+        }
+        return t;
+    }
     function priceElsOf(el) {
         const boxes = [];
         for (const n of el.querySelectorAll('*')) {
             if (n.closest(SKIP_SEL)) continue;
-            if (!FULL_PRICE_RE.test(n.textContent.trim())) continue;
+            if (!FULL_PRICE_RE.test(cleanText(n).trim())) continue;
             const i = boxes.findIndex(b => b.contains(n));
             if (i >= 0) boxes[i] = n;
             else if (!boxes.some(b => n.contains(b))) boxes.push(n);
@@ -194,11 +204,13 @@
     // icon looks identical; falls back to a circled "?" when none exists.
     // Hover shows a small popup styled like Temu's tooltips (native title is
     // slow and ugly).
-    const HELP_TIP = 'Import charges: items shipped from outside the EU add ~3€ '
-        + '+ VAT per item at checkout (Temu policy). Temu may cover ~50% on '
-        + 'orders over 20€ (max 10€) for eligible orders.';
+    const HELP_TIP = 'Items shipped from outside the EU carry an import '
+        + 'charge added at checkout: about 3€ + VAT per item (≈3,63€) on '
+        + 'orders of 150€ or less. On orders over 20€ Temu covers ~50% of '
+        + 'these charges (up to 10€) for eligible orders.';
     // Exact clone of Temu's detail popup (_1dYK2uzG): same classes/styles so
-    // ours is indistinguishable — absolute root, arrow SVG, white dialog box.
+    // ours is indistinguishable — absolute root, arrow SVG, white dialog box,
+    // and the same trailing link style (theirs links to whychoosetemu.html).
     const TIP_ARROW = '<svg viewBox="1 0 22 8" version="1.1" '
         + 'xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" '
         + 'class="_2ewe-jmW" aria-hidden="true"><path d="M0.913721065,9 '
@@ -207,6 +219,8 @@
         + '13.3732471,1.45877803 C13.4009372,1.48492978 13.4278746,1.51186717 '
         + '13.4540263,1.53955726 L18.7242,7.1197412 C19.857659,8.31987419 '
         + '21.4355069,9 23.0862789,9"></path></svg>';
+    const TIP_LINK = '<a class="_2Tl9qLr1 _3qAvUnip _3JB_DvH6" '
+        + 'href="/shipping-info.html">Shipping info</a>';
     function tipOpen() { return document.querySelector('[data-vm-ic-tip]'); }
     function showTip(anchor) {
         hideTip();
@@ -217,9 +231,14 @@
             + '<div class="_3vr7b2Jf _28pVA9Oz" tabindex="-1" role="generic" '
             + 'style="padding-top:7px">' + TIP_ARROW
             + '<div class="_2RWBQk3A _1WSzHClN"><div class="_3HSkEm93" role="dialog">'
-            + '<div class="_3qAvUnip"></div></div></div></div>'
+            + '<div class="_3qAvUnip"></div>' + TIP_LINK + '</div></div></div>'
             + '<div tabindex="0" class="_1NfHXbXB"></div>';
-        tip.querySelector('._3qAvUnip').textContent = HELP_TIP;
+        tip.querySelector('div._3qAvUnip').textContent = HELP_TIP;
+        tip.addEventListener('mouseenter', () => { tip._hover = true; });
+        tip.addEventListener('mouseleave', () => {
+            tip._hover = false;
+            if (!tip._pinned) hideTip();
+        });
         tip.style.visibility = 'hidden';
         document.body.appendChild(tip);
         const r = anchor.getBoundingClientRect();
@@ -273,8 +292,11 @@
             if (!(t && t._pinned)) showTip(anchor);
         });
         zone.addEventListener('mouseleave', () => {
-            const t = tipOpen();
-            if (!(t && t._pinned)) hideTip();
+            // Small delay so the pointer can reach the tip's own link first.
+            setTimeout(() => {
+                const t = tipOpen();
+                if (t && !t._pinned && !t._hover) hideTip();
+            }, 150);
         });
         zone.addEventListener('click', e => {
             e.stopPropagation();
@@ -310,8 +332,14 @@
             let lc = rrpLeaf, pb = null, rr = null;
             for (let i = 0; i < 8 && lc.parentElement && lc !== el; i++) {
                 lc = lc.parentElement;
+                // Never let the row escape its ~1-line height — otherwise the
+                // flex/contents styling would land on the whole card.
+                if (lc.getBoundingClientRect().height > 120) break;
                 if (!pb) pb = priceBoxOf(lc);
-                if (lc.querySelector('img[alt="Details"]')) rr = lc;
+                // rr = the FIRST (lowest) ancestor containing Temu's Details
+                // icon — reassigning on every level used to climb into the
+                // card root on some layouts.
+                if (!rr && lc.querySelector('img[alt="Details"]')) rr = lc;
                 if (pb && rr) break;
             }
             if (rr && pb) {
@@ -321,13 +349,14 @@
                 // it a flex row and rr display:contents merges its children
                 // into the same visual line as our group (independent zone).
                 const host = rr.parentElement;
-                if (host && !host.dataset.vmIcFlex) {
+                const slim = host && host.getBoundingClientRect().height < 120;
+                if (slim && !host.dataset.vmIcFlex) {
                     host.dataset.vmIcFlex = '1';
                     host.style.display = 'flex';
                     host.style.flexWrap = 'wrap';
                     host.style.alignItems = 'baseline';
                 }
-                if (!rr.dataset.vmIcFlex) {
+                if (slim && !rr.dataset.vmIcFlex) {
                     rr.dataset.vmIcFlex = '1';
                     rr.style.display = 'contents';
                 }
@@ -352,13 +381,33 @@
                 const icon = helpIcon(el);
                 wrap.append(sep, lbl2, amt, icon);
                 host.insertBefore(wrap, rr.nextSibling);
+                // The "|" only makes sense while we share a line with Temu's
+                // rendered RRP row (icon visible and same vertical position);
+                // on wrapped/hidden-RRP cards it would dangle at line start.
+                const ti = rr.querySelector('img[alt="Details"]');
+                const tir = ti ? ti.getBoundingClientRect() : { top: -1, height: 0 };
+                if (!(tir.height > 0
+                    && Math.abs(wrap.getBoundingClientRect().top - tir.top) < 8)) {
+                    sep.style.display = 'none';
+                    wrap.style.marginLeft = '0';
+                }
                 bindTip(wrap, icon);
                 return;
             }
         }
         const pb = priceBoxOf(el);
         if (!pb) return;
-        const rowEl = rowOf(pb);
+        // Climb past flex-row wrappers: inserting as a sibling of the price
+        // row would land us INLINE (cramped next to the cart button). The
+        // line must sit below the whole row, so anchor on the first
+        // ancestor whose parent is not a row-direction flex container.
+        let rowEl = rowOf(pb);
+        for (let i = 0; i < 6 && rowEl.parentElement && rowEl !== el; i++) {
+            const pcs = getComputedStyle(rowEl.parentElement);
+            if (!(pcs.display === 'flex' && pcs.flexDirection.startsWith('row'))) break;
+            if (rowEl.parentElement.getBoundingClientRect().height > 200) break;
+            rowEl = rowEl.parentElement;
+        }
         const line = document.createElement('div');
         line.dataset.vmIcLine = '1';
         line.style.cssText = 'font-size:12px;display:flex;align-items:baseline;'
@@ -391,6 +440,11 @@
             host.appendChild(corner);
             host.appendChild(glyph);
         }
+        // Fees line FIRST: it locates the pure-price box, and the inline fee
+        // appended below would contaminate it (text becomes "1,28€ +3,63…").
+        if (!CHARGE_TEXT_RE.test(el.textContent) && !el.querySelector('[data-vm-ic-line]')) {
+            addFeesLine(el);
+        }
         // Price line: "5,82€ +3,63€ → 9,45€" appended inline in red.
         // Skipped on checkout accordion rows — they already carry the real fee.
         if (!CHARGE_TEXT_RE.test(el.textContent) && !el.querySelector('[data-vm-ic-fee]')) {
@@ -402,9 +456,6 @@
                 fee.textContent = ` +${fmt(FEE)} → ${fmt(price + FEE)}`;
                 box.appendChild(fee);
             }
-        }
-        if (!CHARGE_TEXT_RE.test(el.textContent) && !el.querySelector('[data-vm-ic-line]')) {
-            addFeesLine(el);
         }
     }
 
