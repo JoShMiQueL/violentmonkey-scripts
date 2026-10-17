@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Temu: mark items with import charges
 // @namespace    https://github.com/JoShMiQueL/violentmonkey-scripts
-// @version      2.8
+// @version      2.9
 // @downloadURL  https://raw.githubusercontent.com/JoShMiQueL/violentmonkey-scripts/master/temu-hide-import-charges.user.js
 // @updateURL    https://raw.githubusercontent.com/JoShMiQueL/violentmonkey-scripts/master/temu-hide-import-charges.user.js
 // @description  On/off switch. When ON, items that ship from outside the EU get a corner warning triangle and their price line shows "price +3,63 → real total" (~3€/item + VAT, per Temu's policy). Cart/mini-cart totals include the fees and Temu's 50% coverage note. Nothing is hidden or removed.
@@ -211,6 +211,7 @@
         const w = tip.offsetWidth, h = tip.offsetHeight;
         tip.style.left = Math.max(8, Math.min(r.left, innerWidth - w - 8)) + 'px';
         tip.style.top = (r.bottom + 6 + h > innerHeight ? r.top - h - 6 : r.bottom + 6) + 'px';
+        return tip;
     }
     function hideTip() {
         const t = document.querySelector('[data-vm-ic-tip]');
@@ -235,6 +236,15 @@
         w.dataset.vmIcHelp = '1';
         w.addEventListener('mouseenter', () => showTip(w));
         w.addEventListener('mouseleave', hideTip);
+        // Temu's "?" opens its popup on click — mirror that so ours behaves
+        // identically (toggles open/closed instead of hover-only).
+        w.addEventListener('click', e => {
+            e.stopPropagation();
+            const open = document.querySelector('[data-vm-ic-tip]');
+            if (open && open._anchor === w) { hideTip(); return; }
+            const tip = showTip(w);
+            if (tip) tip._anchor = w;
+        });
         return w;
     }
     addEventListener('scroll', hideTip, true);
@@ -264,12 +274,26 @@
                 if (pb && rr) break;
             }
             if (rr && pb) {
+                // Our group must live OUTSIDE rr: the whole RRP row is Temu's
+                // click/hover target, so anything inside it fires their popup.
+                // The outer wrapper (_1K94Nm8R, block) only holds rr, so we turn
+                // it into a flex row and append our group as a sibling — same
+                // visual line, independent hover/click zone.
+                const host = rr.parentElement;
+                if (host && !host.dataset.vmIcFlex) {
+                    host.dataset.vmIcFlex = '1';
+                    host.style.display = 'flex';
+                    host.style.flexWrap = 'wrap';
+                    host.style.alignItems = 'baseline';
+                }
                 const wrap = document.createElement('span');
                 wrap.dataset.vmIcLine = '1';
+                wrap.style.cssText = 'display:inline-flex;align-items:baseline;'
+                    + 'margin-left:10px';
                 const sep = document.createElement('span');
                 sep.dataset.vmIcLine = '1';
                 sep.style.color = '#999';
-                sep.textContent = ' · ';
+                sep.textContent = '·';
                 const lbl2 = rrpLeaf.cloneNode(false);
                 lbl2.dataset.vmIcLine = '1';
                 lbl2.removeAttribute('aria-hidden');
@@ -280,8 +304,8 @@
                 amt.removeAttribute('aria-hidden');
                 amt.style.color = '#e02424';
                 amt.textContent = '+' + fmt(FEE);
-                wrap.append(sep, lbl2, ' ', amt, helpIcon(el));
-                rr.appendChild(wrap);
+                wrap.append(sep, ' ', lbl2, ' ', amt, helpIcon(el));
+                host.insertBefore(wrap, rr.nextSibling);
                 return;
             }
         }
@@ -342,6 +366,12 @@
         for (const el of document.querySelectorAll('[data-vm-ic-rel]')) {
             el.style.position = '';
             delete el.dataset.vmIcRel;
+        }
+        for (const el of document.querySelectorAll('[data-vm-ic-flex]')) {
+            el.style.display = '';
+            el.style.flexWrap = '';
+            el.style.alignItems = '';
+            delete el.dataset.vmIcFlex;
         }
         for (const el of document.querySelectorAll('[data-vm-ic-amount]')) delete el.dataset.vmIcAmount;
         for (const b of document.querySelectorAll(
