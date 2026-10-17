@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Temu: mark items with import charges
 // @namespace    https://github.com/JoShMiQueL/violentmonkey-scripts
-// @version      2.5
+// @version      2.6
 // @downloadURL  https://raw.githubusercontent.com/JoShMiQueL/violentmonkey-scripts/master/temu-hide-import-charges.user.js
 // @updateURL    https://raw.githubusercontent.com/JoShMiQueL/violentmonkey-scripts/master/temu-hide-import-charges.user.js
 // @description  On/off switch. When ON, items that ship from outside the EU get a corner warning triangle and their price line shows "price +3,63 → real total" (~3€/item + VAT, per Temu's policy). Cart/mini-cart totals include the fees and Temu's 50% coverage note. Nothing is hidden or removed.
@@ -36,12 +36,16 @@
 
     const style = document.createElement('style');
     style.textContent = `
-        [data-vm-ic-corner]{position:absolute;top:0;right:0;width:0;height:0;
-            border-top:26px solid #e02424;border-left:26px solid transparent;pointer-events:none}
-        [data-vm-ic-glyph]{position:absolute;top:2px;right:3px;color:#fff;
+        [data-vm-ic-corner]{position:absolute;bottom:0;right:0;width:0;height:0;
+            border-bottom:26px solid #e02424;border-left:26px solid transparent;pointer-events:none}
+        [data-vm-ic-glyph]{position:absolute;bottom:1px;right:2px;color:#fff;
             font:700 12px/1 system-ui,sans-serif;pointer-events:none}
         [data-vm-ic-fee]{color:#e02424;font-weight:600;white-space:nowrap}
-        [data-vm-ic-note]{color:#e02424;font:600 12px/1.4 system-ui,sans-serif;margin-top:2px}
+        [data-vm-ic-note]{color:#e02424;font:600 12px/1.4 system-ui,sans-serif}
+        [data-vm-ic-line]{color:#e02424}
+        [data-vm-ic-help]{display:inline-flex;width:12px;height:12px;border:1px solid #e02424;
+            border-radius:50%;color:#e02424;font-size:9px;line-height:1;align-items:center;
+            justify-content:center;margin-left:3px;cursor:help;vertical-align:middle}
         #vmIcToggle{position:fixed;right:14px;bottom:14px;z-index:999999;cursor:pointer;
             border:0;border-radius:20px;padding:8px 14px;font:600 13px system-ui,sans-serif;
             color:#fff;box-shadow:0 2px 8px rgba(0,0,0,.35)}
@@ -114,15 +118,24 @@
     // Temu renders prices as split spans ("5" ",82" "€"), so find the deepest
     // element whose WHOLE text is a single price. "RRP 7,01€" and fee rows
     // never match (extra text).
+    const SKIP_SEL = '[data-vm-ic-fee],[data-vm-ic-note],[data-vm-ic-corner],'
+        + '[data-vm-ic-glyph],[data-vm-ic-line],[data-vm-ic-help]';
     const FULL_PRICE_RE = /^\s*€?\s*\d+[.,]\d+\s*€\s*$/;
-    function priceBoxOf(el) {
-        let box = null;
+    // Deepest elements whose WHOLE text is a single price (one per branch —
+    // Temu duplicates values for screen readers, so there can be several).
+    function priceElsOf(el) {
+        const boxes = [];
         for (const n of el.querySelectorAll('*')) {
-            if (n.dataset && (n.dataset.vmIcFee || n.dataset.vmIcNote
-                || n.dataset.vmIcCorner || n.dataset.vmIcGlyph)) continue;
-            if (FULL_PRICE_RE.test(n.textContent.trim()) && (!box || box.contains(n))) box = n;
+            if (n.closest(SKIP_SEL)) continue;
+            if (!FULL_PRICE_RE.test(n.textContent.trim())) continue;
+            const i = boxes.findIndex(b => b.contains(n));
+            if (i >= 0) boxes[i] = n;
+            else if (!boxes.some(b => n.contains(b))) boxes.push(n);
         }
-        return box;
+        return boxes;
+    }
+    function priceBoxOf(el) {
+        return priceElsOf(el)[0] || null;
     }
 
     function parsePrice(txt) {
@@ -141,7 +154,7 @@
         const done = new Set();
         for (const el of root.querySelectorAll('*')) {
             if (el.children.length > 0) continue;
-            if (el.dataset && (el.dataset.vmIcFee || el.dataset.vmIcNote)) continue;
+            if (el.closest(SKIP_SEL)) continue;
             const t = el.textContent.trim();
             if (!/^[0-9,.€]$/.test(t)) continue;
             const p = el.parentElement;
@@ -156,25 +169,116 @@
         return reels ? out : null;
     }
 
+    // Tightest ancestor that wraps the product image — the corner triangle
+    // lives at ITS bottom-right (safe from delete buttons / qty selectors).
+    function iconHost(el) {
+        let best = null, area = 0;
+        for (const img of el.querySelectorAll('img')) {
+            const u = img.currentSrc || img.src || img.getAttribute('data-src') || '';
+            if (!PRODUCT_IMG_RE.test(u)) continue;
+            const r = img.getBoundingClientRect();
+            if (r.width * r.height > area) { area = r.width * r.height; best = img; }
+        }
+        if (!best) return el;
+        const ir = best.getBoundingClientRect();
+        let host = best.parentElement || el;
+        while (host !== el && host.parentElement) {
+            const pr = host.parentElement.getBoundingClientRect();
+            if (pr.width > ir.width * 1.3 || pr.height > ir.height * 1.3) break;
+            host = host.parentElement;
+        }
+        return host;
+    }
+
+    // Same look as Temu's RRP "?" icon: a tiny circled question mark with a
+    // native tooltip explaining the charge.
+    function helpIcon() {
+        const s = document.createElement('span');
+        s.dataset.vmIcHelp = '1';
+        s.textContent = '?';
+        s.title = 'Import charges: items shipped from outside the EU add ~3€ + VAT '
+            + 'per item at checkout (Temu policy). Temu may cover ~50% on orders '
+            + 'over 20€ (max 10€) for eligible orders.';
+        return s;
+    }
+
+    // Climb from a pure-price element while the parent only wraps that price:
+    // the result is the whole price row.
+    function rowOf(box) {
+        let n = box;
+        const t = box.textContent.replace(/\s+/g, '');
+        while (n.parentElement
+            && n.parentElement.textContent.replace(/\s+/g, '') === t) n = n.parentElement;
+        return n;
+    }
+
+    // "Import fees 3,63€ ?" — appended to the RRP line when the card has one
+    // (cloning Temu's own classes), or as its own line under the price.
+    function addFeesLine(el) {
+        const rrpLeaf = [...el.querySelectorAll('*')]
+            .find(n => n.children.length === 0 && /^\s*RRP\s*$/.test(n.textContent));
+        if (rrpLeaf) {
+            let lc = rrpLeaf, pb = null;
+            for (let i = 0; i < 6 && lc.parentElement && lc !== el; i++) {
+                lc = lc.parentElement;
+                pb = priceBoxOf(lc);
+                if (pb) break;
+            }
+            if (pb) {
+                const wrap = document.createElement('span');
+                wrap.dataset.vmIcLine = '1';
+                const sep = document.createElement('span');
+                sep.dataset.vmIcLine = '1';
+                sep.style.color = '#999';
+                sep.textContent = ' · ';
+                const lbl2 = rrpLeaf.cloneNode(false);
+                lbl2.dataset.vmIcLine = '1';
+                lbl2.removeAttribute('aria-hidden');
+                lbl2.style.color = '#e02424';
+                lbl2.textContent = 'Import fees';
+                const amt = pb.cloneNode(false);
+                amt.dataset.vmIcLine = '1';
+                amt.removeAttribute('aria-hidden');
+                amt.style.color = '#e02424';
+                amt.textContent = '+' + fmt(FEE);
+                wrap.append(sep, lbl2, ' ', amt, helpIcon());
+                lc.appendChild(wrap);
+                return;
+            }
+        }
+        const pb = priceBoxOf(el);
+        if (!pb) return;
+        const rowEl = rowOf(pb);
+        const line = document.createElement('div');
+        line.dataset.vmIcLine = '1';
+        line.style.cssText = 'font-size:12px;display:block;margin-top:1px';
+        const amt = document.createElement('b');
+        amt.dataset.vmIcLine = '1';
+        amt.textContent = `Import fees +${fmt(FEE)}`;
+        line.append(amt, ' ', helpIcon());
+        rowEl.parentElement.insertBefore(line, rowEl.nextSibling);
+    }
+
     function mark(el, kind) {
         el.dataset.vmIc = 'charged';
         el.dataset.vmIcKind = kind || 'row';
-        if (!el.querySelector('[data-vm-ic-corner]')) {
+        const host = iconHost(el);
+        if (!host.querySelector('[data-vm-ic-corner]')) {
             // positioned children need a positioned parent — only set relative
             // on static elements so absolute/fixed layouts are never broken
-            if (getComputedStyle(el).position === 'static') {
-                el.dataset.vmIcRel = '1';
-                el.style.position = 'relative';
+            if (getComputedStyle(host).position === 'static') {
+                host.dataset.vmIcRel = '1';
+                host.style.position = 'relative';
             }
             const corner = document.createElement('span');
             corner.dataset.vmIcCorner = '1';
             const glyph = document.createElement('span');
             glyph.dataset.vmIcGlyph = '1';
             glyph.textContent = '!';
-            el.appendChild(corner);
-            el.appendChild(glyph);
+            host.appendChild(corner);
+            host.appendChild(glyph);
         }
-        // Price line: "5,82€ +3,63 → 9,45€" appended inline in red.
+        // Price line: "5,82€ +3,63€ → 9,45€" appended inline in red.
         // Skipped on checkout accordion rows — they already carry the real fee.
         if (!CHARGE_TEXT_RE.test(el.textContent) && !el.querySelector('[data-vm-ic-fee]')) {
             const box = priceBoxOf(el);
@@ -182,9 +286,12 @@
             if (box && price !== null) {
                 const fee = document.createElement('span');
                 fee.dataset.vmIcFee = '1';
-                fee.textContent = ` +3,63 → ${fmt(price + FEE)}`;
+                fee.textContent = ` +${fmt(FEE)} → ${fmt(price + FEE)}`;
                 box.appendChild(fee);
             }
+        }
+        if (!CHARGE_TEXT_RE.test(el.textContent) && !el.querySelector('[data-vm-ic-line]')) {
+            addFeesLine(el);
         }
     }
 
@@ -192,11 +299,15 @@
         for (const el of document.querySelectorAll('[data-vm-ic]')) {
             delete el.dataset.vmIc;
             delete el.dataset.vmIcKind;
-            if (el.dataset.vmIcRel) { el.style.position = ''; delete el.dataset.vmIcRel; }
+        }
+        for (const el of document.querySelectorAll('[data-vm-ic-rel]')) {
+            el.style.position = '';
+            delete el.dataset.vmIcRel;
         }
         for (const el of document.querySelectorAll('[data-vm-ic-amount]')) delete el.dataset.vmIcAmount;
         for (const b of document.querySelectorAll(
-            '[data-vm-ic-corner], [data-vm-ic-glyph], [data-vm-ic-fee], [data-vm-ic-note]')) b.remove();
+            '[data-vm-ic-corner], [data-vm-ic-glyph], [data-vm-ic-fee], [data-vm-ic-note],'
+            + ' [data-vm-ic-line], [data-vm-ic-feesrow]')) b.remove();
     }
 
     // ---- scanning -----------------------------------------------------------
@@ -235,11 +346,15 @@
         return marked;
     }
 
-    // Cart page + mini-cart sidebar: extend the Subtotal/Total line with the
-    // real total (fees of selected charged items) + Temu coverage note.
+    // Cart page + mini-cart sidebar: real total with fees + coverage note.
+    // Cart page  → a native summary row cloned before the Total row.
+    // Sidebar    → a compact block line under the subtotal row.
     function updateCartTotal() {
+        if (/checkout/i.test(location.pathname)) return; // checkout shows real fees
         const lbl = [...document.querySelectorAll('*')]
-            .find(e => e.children.length === 0 && /^\s*(Subtotal|Total)\s*$/i.test(e.textContent.trim()));
+            .filter(e => e.children.length === 0
+                && /^\s*(Subtotal|Total|Item\(s\) total:?)\s*$/i.test(e.textContent.trim()))
+            .pop(); // the grand-total label is the last one in DOM order
         if (!lbl) return;
         // Lowest ancestor containing a pure-price element. In the mini-cart
         // the label and the amount are siblings, so this can be the whole
@@ -263,11 +378,64 @@
             const cb = e.querySelector('[aria-checked]');
             return !cb || cb.getAttribute('aria-checked') === 'true';
         }).length;
-
         const fees = n * FEE;
         const covered = subtotal > COVER_MIN_ORDER ? Math.min(fees * 0.5, COVER_MAX) : 0;
+        const coverTxt = `Temu covers ~50% of fees on orders >${COVER_MIN_ORDER}€`
+            + ` (max ${COVER_MAX}€, if eligible) → ≈ ${fmt(subtotal + fees - covered)}`;
 
-        // Inline "+fees → total" right after the price element
+        if (row.getBoundingClientRect().height > 150) {
+            // ---- mini-cart sidebar: compact block under the subtotal ----
+            let priceTop = amountBox;
+            while (priceTop.parentElement && priceTop.parentElement !== row) {
+                priceTop = priceTop.parentElement;
+            }
+            let line = row.querySelector(':scope > [data-vm-ic-note]');
+            if (!line) {
+                line = document.createElement('div');
+                line.dataset.vmIcNote = '1';
+                line.style.cssText = 'display:block;font:600 12px/1.4 system-ui,sans-serif;'
+                    + 'color:#e02424;padding:3px 14px;box-sizing:border-box';
+                priceTop.parentElement.insertBefore(line, priceTop.nextSibling);
+            }
+            line.innerHTML = '';
+            const main = document.createElement('div');
+            main.textContent = fees
+                ? `Import fees (${n}): +${fmt(fees)} → Total: ${fmt(subtotal + fees)}`
+                : 'No import fees on selected items';
+            line.appendChild(main);
+            const cov = document.createElement('div');
+            cov.style.cssText = 'font:400 11px/1.3 system-ui,sans-serif;color:#777';
+            cov.textContent = covered ? coverTxt
+                : `Orders >${COVER_MIN_ORDER}€: Temu covers ~50% of fees (max ${COVER_MAX}€)`;
+            line.appendChild(cov);
+            return;
+        }
+
+        // ---- cart page Order Summary: clone a native row before Total ----
+        const wrap = row.parentElement;               // e.g. _36gn5Sma wrapper
+        if (!wrap.parentElement.querySelector(':scope > [data-vm-ic-feesrow]')) {
+            const clone = wrap.cloneNode(true);
+            clone.removeAttribute('id');
+            clone.dataset.vmIcFeesrow = '1';
+            clone.className = clone.classList[0] || ''; // keep row style, drop total emphasis
+            clone.querySelectorAll(SKIP_SEL).forEach(n => n.remove());
+            const l = [...clone.querySelectorAll('*')]
+                .find(s => s.children.length === 0 && /total/i.test(s.textContent));
+            if (l) {
+                l.textContent = `Import fees (${n}):`;
+                l.style.color = '#e02424';
+                l.style.fontWeight = '600';
+            }
+            // rewrite every price copy in the cloned row (sr-only + visible)
+            for (const v of priceElsOf(clone)) {
+                v.textContent = '+' + fmt(fees);
+                v.style.color = '#e02424';
+                v.style.fontWeight = '700';
+            }
+            wrap.parentElement.insertBefore(clone, wrap);
+        }
+
+        // Inline "+fees → total" on the Total price itself
         let f = row.querySelector('[data-vm-ic-totalfee]');
         if (!f) {
             f = document.createElement('span');
@@ -277,20 +445,17 @@
         }
         f.textContent = ` +${fmt(fees)} → ${fmt(subtotal + fees)}`;
 
-        // Coverage note under the subtotal line, inside the panel
-        let anchor = lbl;
-        while (anchor.parentElement && anchor.parentElement !== row) anchor = anchor.parentElement;
-        const host = anchor.parentElement === row ? anchor : row;
-        let note = row.parentElement.querySelector(':scope > [data-vm-ic-note]')
-            || row.querySelector(':scope > [data-vm-ic-note]');
+        // Coverage fine-print under the fees row
+        let note = wrap.parentElement.querySelector(':scope > [data-vm-ic-note]');
         if (!note) {
             note = document.createElement('div');
             note.dataset.vmIcNote = '1';
-            host.parentElement.insertBefore(note, host.nextSibling);
+            note.style.cssText = 'font-weight:400;color:#777;font-size:13px;margin:2px 0 4px';
+            wrap.parentElement.insertBefore(note, wrap);
         }
-        note.textContent = covered
-            ? `Temu covers ~50% of fees on orders >${COVER_MIN_ORDER}€ (max ${COVER_MAX}€, if eligible): you could pay ≈ ${fmt(subtotal + fees - covered)}`
-            : (fees ? `Import fees on ${n} selected item(s): +${fmt(fees)}` : 'No import fees on selected items');
+        note.textContent = covered ? coverTxt
+            : (fees ? `Orders >${COVER_MIN_ORDER}€: Temu covers ~50% of fees (max ${COVER_MAX}€)`
+                : 'No import fees on selected items');
     }
 
     let pending = false;
