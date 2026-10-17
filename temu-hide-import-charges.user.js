@@ -43,9 +43,9 @@
         [data-vm-ic-fee]{color:#e02424;font-weight:600;white-space:nowrap}
         [data-vm-ic-note]{color:#e02424;font:600 12px/1.4 system-ui,sans-serif}
         [data-vm-ic-line]{color:#e02424}
-        [data-vm-ic-help]{display:inline-flex;width:12px;height:12px;border:1px solid #e02424;
+        [data-vm-ic-helpfb]{display:inline-flex;width:12px;height:12px;border:1px solid #e02424;
             border-radius:50%;color:#e02424;font-size:9px;line-height:1;align-items:center;
-            justify-content:center;margin-left:3px;cursor:help;vertical-align:middle}
+            justify-content:center;margin-left:3px;cursor:pointer;vertical-align:middle}
         #vmIcToggle{position:fixed;right:14px;bottom:14px;z-index:999999;cursor:pointer;
             border:0;border-radius:20px;padding:8px 14px;font:600 13px system-ui,sans-serif;
             color:#fff;box-shadow:0 2px 8px rgba(0,0,0,.35)}
@@ -119,7 +119,7 @@
     // element whose WHOLE text is a single price. "RRP 7,01€" and fee rows
     // never match (extra text).
     const SKIP_SEL = '[data-vm-ic-fee],[data-vm-ic-note],[data-vm-ic-corner],'
-        + '[data-vm-ic-glyph],[data-vm-ic-line],[data-vm-ic-help]';
+        + '[data-vm-ic-glyph],[data-vm-ic-line],[data-vm-ic-help],[data-vm-ic-helpfb]';
     const FULL_PRICE_RE = /^\s*€?\s*\d+[.,]\d+\s*€\s*$/;
     // Deepest elements whose WHOLE text is a single price (one per branch —
     // Temu duplicates values for screen readers, so there can be several).
@@ -197,26 +197,54 @@
     const HELP_TIP = 'Import charges: items shipped from outside the EU add ~3€ '
         + '+ VAT per item at checkout (Temu policy). Temu may cover ~50% on '
         + 'orders over 20€ (max 10€) for eligible orders.';
+    // Exact clone of Temu's detail popup (_1dYK2uzG): same classes/styles so
+    // ours is indistinguishable — absolute root, arrow SVG, white dialog box.
+    const TIP_ARROW = '<svg viewBox="1 0 22 8" version="1.1" '
+        + 'xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" '
+        + 'class="_2ewe-jmW" aria-hidden="true"><path d="M0.913721065,9 '
+        + 'C2.56449311,9 4.14234104,8.31987419 5.27579998,7.1197412 '
+        + 'L10.5459737,1.53955726 C11.3043971,0.73652071 12.5702105,0.700354613 '
+        + '13.3732471,1.45877803 C13.4009372,1.48492978 13.4278746,1.51186717 '
+        + '13.4540263,1.53955726 L18.7242,7.1197412 C19.857659,8.31987419 '
+        + '21.4355069,9 23.0862789,9"></path></svg>';
+    function tipOpen() { return document.querySelector('[data-vm-ic-tip]'); }
     function showTip(anchor) {
         hideTip();
         const tip = document.createElement('div');
+        tip.className = '_1dYK2uzG';
         tip.dataset.vmIcTip = '1';
-        tip.textContent = HELP_TIP;
-        tip.style.cssText = 'position:fixed;z-index:1000000;background:#fff;color:#333;'
-            + 'border:1px solid #e3e3e3;border-radius:8px;padding:8px 10px;'
-            + 'font:400 12px/1.45 system-ui,sans-serif;max-width:230px;'
-            + 'box-shadow:0 2px 12px rgba(0,0,0,.18);pointer-events:none';
+        tip.innerHTML = '<div tabindex="0" class="_1NfHXbXB"></div>'
+            + '<div class="_3vr7b2Jf _28pVA9Oz" tabindex="-1" role="generic" '
+            + 'style="padding-top:7px">' + TIP_ARROW
+            + '<div class="_2RWBQk3A _1WSzHClN"><div class="_3HSkEm93" role="dialog">'
+            + '<div class="_3qAvUnip"></div></div></div></div>'
+            + '<div tabindex="0" class="_1NfHXbXB"></div>';
+        tip.querySelector('._3qAvUnip').textContent = HELP_TIP;
+        tip.style.visibility = 'hidden';
         document.body.appendChild(tip);
         const r = anchor.getBoundingClientRect();
-        const w = tip.offsetWidth, h = tip.offsetHeight;
-        tip.style.left = Math.max(8, Math.min(r.left, innerWidth - w - 8)) + 'px';
-        tip.style.top = (r.bottom + 6 + h > innerHeight ? r.top - h - 6 : r.bottom + 6) + 'px';
+        // The dialog centers itself under the root's origin; the arrow's left
+        // edge sits at root.left, so shift half the arrow width (~6px) to aim
+        // the arrow's center at the anchor's center (page coordinates).
+        let left = r.left + scrollX + r.width / 2 - 6;
+        tip.style.left = left + 'px';
+        tip.style.top = (r.bottom + scrollY) + 'px';
+        // Keep the white box inside the viewport.
+        const br = tip.querySelector('._2RWBQk3A').getBoundingClientRect();
+        if (br.right > innerWidth - 8) tip.style.left = (left - (br.right - innerWidth + 8)) + 'px';
+        else if (br.left < 8) tip.style.left = (left + (8 - br.left)) + 'px';
+        tip.style.visibility = '';
         return tip;
     }
     function hideTip() {
-        const t = document.querySelector('[data-vm-ic-tip]');
+        const t = tipOpen();
         if (t) t.remove();
     }
+    // A click outside any fee line closes a pinned tip (mirrors Temu).
+    document.addEventListener('click', e => {
+        const t = tipOpen();
+        if (t && t._pinned && !e.target.closest('[data-vm-ic-line]')) hideTip();
+    }, true);
     function helpIcon(scopeEl) {
         const tplImg = (scopeEl && scopeEl.querySelector('img[alt="Details"]'))
             || document.querySelector('img[alt="Details"]');
@@ -228,24 +256,37 @@
                 const ds = im.getAttribute('data-src');
                 if (ds && !/^https?:/.test(im.src)) im.src = ds;
             }
-            w.style.cssText += ';display:inline-flex;vertical-align:middle;margin-left:3px;cursor:help';
+            w.style.cssText += ';display:inline-flex;vertical-align:middle;cursor:pointer';
         } else {
             w = document.createElement('span');
+            w.dataset.vmIcHelpfb = '1';
             w.textContent = '?';
         }
         w.dataset.vmIcHelp = '1';
-        w.addEventListener('mouseenter', () => showTip(w));
-        w.addEventListener('mouseleave', hideTip);
-        // Temu's "?" opens its popup on click — mirror that so ours behaves
-        // identically (toggles open/closed instead of hover-only).
-        w.addEventListener('click', e => {
-            e.stopPropagation();
-            const open = document.querySelector('[data-vm-ic-tip]');
-            if (open && open._anchor === w) { hideTip(); return; }
-            const tip = showTip(w);
-            if (tip) tip._anchor = w;
-        });
         return w;
+    }
+    // Hover on the whole fee group shows the tip (anchored at the "?"); a
+    // click pins it until the next click — same affordance as Temu's "Details".
+    function bindTip(zone, anchor) {
+        zone.addEventListener('mouseenter', () => {
+            const t = tipOpen();
+            if (!(t && t._pinned)) showTip(anchor);
+        });
+        zone.addEventListener('mouseleave', () => {
+            const t = tipOpen();
+            if (!(t && t._pinned)) hideTip();
+        });
+        zone.addEventListener('click', e => {
+            e.stopPropagation();
+            const t = tipOpen();
+            if (t && t._zone === zone) {
+                if (t._pinned) { t._pinned = false; hideTip(); } else t._pinned = true;
+                return;
+            }
+            const tip = showTip(anchor);
+            tip._zone = zone;
+            tip._pinned = true;
+        });
     }
     addEventListener('scroll', hideTip, true);
 
@@ -276,9 +317,9 @@
             if (rr && pb) {
                 // Our group must live OUTSIDE rr: the whole RRP row is Temu's
                 // click/hover target, so anything inside it fires their popup.
-                // The outer wrapper (_1K94Nm8R, block) only holds rr, so we turn
-                // it into a flex row and append our group as a sibling — same
-                // visual line, independent hover/click zone.
+                // The outer wrapper (_1K94Nm8R, block) only holds rr — making
+                // it a flex row and rr display:contents merges its children
+                // into the same visual line as our group (independent zone).
                 const host = rr.parentElement;
                 if (host && !host.dataset.vmIcFlex) {
                     host.dataset.vmIcFlex = '1';
@@ -286,14 +327,18 @@
                     host.style.flexWrap = 'wrap';
                     host.style.alignItems = 'baseline';
                 }
+                if (!rr.dataset.vmIcFlex) {
+                    rr.dataset.vmIcFlex = '1';
+                    rr.style.display = 'contents';
+                }
                 const wrap = document.createElement('span');
                 wrap.dataset.vmIcLine = '1';
                 wrap.style.cssText = 'display:inline-flex;align-items:baseline;'
-                    + 'margin-left:10px';
+                    + 'column-gap:6px;margin-left:6px';
                 const sep = document.createElement('span');
                 sep.dataset.vmIcLine = '1';
                 sep.style.color = '#999';
-                sep.textContent = '·';
+                sep.textContent = '|';
                 const lbl2 = rrpLeaf.cloneNode(false);
                 lbl2.dataset.vmIcLine = '1';
                 lbl2.removeAttribute('aria-hidden');
@@ -304,8 +349,10 @@
                 amt.removeAttribute('aria-hidden');
                 amt.style.color = '#e02424';
                 amt.textContent = '+' + fmt(FEE);
-                wrap.append(sep, ' ', lbl2, ' ', amt, helpIcon(el));
+                const icon = helpIcon(el);
+                wrap.append(sep, lbl2, amt, icon);
                 host.insertBefore(wrap, rr.nextSibling);
+                bindTip(wrap, icon);
                 return;
             }
         }
@@ -314,12 +361,15 @@
         const rowEl = rowOf(pb);
         const line = document.createElement('div');
         line.dataset.vmIcLine = '1';
-        line.style.cssText = 'font-size:12px;display:block;margin-top:1px';
+        line.style.cssText = 'font-size:12px;display:flex;align-items:baseline;'
+            + 'column-gap:4px;margin-top:1px';
         const amt = document.createElement('b');
         amt.dataset.vmIcLine = '1';
         amt.textContent = `Import fees +${fmt(FEE)}`;
-        line.append(amt, ' ', helpIcon(el));
+        const icon = helpIcon(el);
+        line.append(amt, icon);
         rowEl.parentElement.insertBefore(line, rowEl.nextSibling);
+        bindTip(line, icon);
     }
 
     function mark(el, kind) {
