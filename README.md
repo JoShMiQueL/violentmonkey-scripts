@@ -13,7 +13,7 @@ Colección de userscripts para Violentmonkey / Tampermonkey.
 | Script | Qué hace | Sitio |
 |--------|----------|-------|
 | `murciaeduca-enhancer.user.js` | Enhancer del aula virtual: badge ✓/✗ de entrega por tarea, resumen flotante en el curso, y en "Mis cursos" totales por curso + profesor + próxima entrega | `aulavirtual.murciaeduca.es` |
-| `temu-hide-import-charges.user.js` | Elimina de los listados los artículos con cargo de importación (fila "RRP €X.XX"), incluidos los carruseles/ads. Nunca actúa en carrito ni checkout | `*.temu.com` |
+| `temu-hide-import-charges.user.js` | Switch ON/OFF (píldora flotante + menú VM). Cuando está activo marca con borde rojo + badge del importe todo artículo enviado desde fuera de la UE (cargo de importación ~3€/ítem + IVA, política oficial de Temu) — en listados, mini-carrito, carrito y checkout. Detecta el origen por el CDN de la imagen (`img-eu.kwcdn.com`/`local-goods-img` = almacén local, sin cargo). Nunca oculta ni elimina nada | `*.temu.com` |
 
 ## Añadir un script nuevo
 
