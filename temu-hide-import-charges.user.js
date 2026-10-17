@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Temu: mark items with import charges
 // @namespace    https://github.com/JoShMiQueL/violentmonkey-scripts
-// @version      2.10
+// @version      2.11
 // @downloadURL  https://raw.githubusercontent.com/JoShMiQueL/violentmonkey-scripts/master/temu-hide-import-charges.user.js
 // @updateURL    https://raw.githubusercontent.com/JoShMiQueL/violentmonkey-scripts/master/temu-hide-import-charges.user.js
 // @description  On/off switch. When ON, items that ship from outside the EU get a corner warning triangle and their price line shows "price +3,63 → real total" (~3€/item + VAT, per Temu's policy). Cart/mini-cart totals include the fees and Temu's 50% coverage note. Nothing is hidden or removed.
