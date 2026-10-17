@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Temu: mark items with import charges
 // @namespace    https://github.com/JoShMiQueL/violentmonkey-scripts
-// @version      2.2
+// @version      2.3
 // @downloadURL  https://raw.githubusercontent.com/JoShMiQueL/violentmonkey-scripts/master/temu-hide-import-charges.user.js
 // @updateURL    https://raw.githubusercontent.com/JoShMiQueL/violentmonkey-scripts/master/temu-hide-import-charges.user.js
 // @description  On/off switch. When ON, marks every item that ships from outside the EU (import charge ~3€/item + VAT, per Temu's policy) with a red border + fee badge — listings, mini-cart, cart and checkout. Nothing is hidden or removed.
@@ -33,8 +33,10 @@
 
     const style = document.createElement('style');
     style.textContent = `
-        [data-vm-ic-bar]{position:absolute;left:8px;right:8px;bottom:-2px;height:2px;
-            background:#e02424;z-index:9999;pointer-events:none;border-radius:1px}
+        [data-vm-ic-corner]{position:absolute;top:0;right:0;width:0;height:0;z-index:9999;
+            border-top:26px solid #e02424;border-left:26px solid transparent;pointer-events:none}
+        [data-vm-ic-glyph]{position:absolute;top:2px;right:3px;color:#fff;z-index:9999;
+            font:700 12px/1 system-ui,sans-serif;pointer-events:none}
         [data-vm-ic-badge]{position:absolute;top:4px;left:4px;z-index:9999;pointer-events:none;
             background:#e02424;color:#fff;font:600 11px/1.4 system-ui,sans-serif;
             padding:2px 6px;border-radius:4px;box-shadow:0 1px 4px rgba(0,0,0,.35)}
@@ -123,10 +125,14 @@
         badge.dataset.vmIcBadge = '1';
         badge.textContent = 'Import fee ' + amountOf(el);
         badge.title = 'Ships from outside the EU — import charge applies at checkout';
-        const bar = document.createElement('span');
-        bar.dataset.vmIcBar = '1';
+        const corner = document.createElement('span');
+        corner.dataset.vmIcCorner = '1';
+        const glyph = document.createElement('span');
+        glyph.dataset.vmIcGlyph = '1';
+        glyph.textContent = '!';
         el.appendChild(badge);
-        el.appendChild(bar);
+        el.appendChild(corner);
+        el.appendChild(glyph);
     }
 
     function unmarkAll() {
@@ -134,7 +140,7 @@
             delete el.dataset.vmIc;
             if (el.dataset.vmIcRel) { el.style.position = ''; delete el.dataset.vmIcRel; }
         }
-        for (const b of document.querySelectorAll('[data-vm-ic-badge], [data-vm-ic-bar]')) b.remove();
+        for (const b of document.querySelectorAll('[data-vm-ic-badge], [data-vm-ic-corner], [data-vm-ic-glyph]')) b.remove();
     }
 
     // ---- scanning -----------------------------------------------------------
