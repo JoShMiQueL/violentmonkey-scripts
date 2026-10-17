@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Temu: mark items with import charges
 // @namespace    https://github.com/JoShMiQueL/violentmonkey-scripts
-// @version      2.6
+// @version      2.7
 // @downloadURL  https://raw.githubusercontent.com/JoShMiQueL/violentmonkey-scripts/master/temu-hide-import-charges.user.js
 // @updateURL    https://raw.githubusercontent.com/JoShMiQueL/violentmonkey-scripts/master/temu-hide-import-charges.user.js
 // @description  On/off switch. When ON, items that ship from outside the EU get a corner warning triangle and their price line shows "price +3,63 → real total" (~3€/item + VAT, per Temu's policy). Cart/mini-cart totals include the fees and Temu's 50% coverage note. Nothing is hidden or removed.
@@ -190,15 +190,30 @@
         return host;
     }
 
-    // Same look as Temu's RRP "?" icon: a tiny circled question mark with a
-    // native tooltip explaining the charge.
-    function helpIcon() {
+    // Reuse Temu's own RRP "?" icon (Ek9HiUKH > img[alt=Details]) so our help
+    // icon looks identical; falls back to a circled "?" when none exists.
+    const HELP_TIP = 'Import charges: items shipped from outside the EU add ~3€ '
+        + '+ VAT per item at checkout (Temu policy). Temu may cover ~50% on '
+        + 'orders over 20€ (max 10€) for eligible orders.';
+    function helpIcon(scopeEl) {
+        const tplImg = (scopeEl && scopeEl.querySelector('img[alt="Details"]'))
+            || document.querySelector('img[alt="Details"]');
+        if (tplImg && tplImg.parentElement) {
+            const w = tplImg.parentElement.cloneNode(true);
+            w.dataset.vmIcHelp = '1';
+            const im = w.querySelector('img');
+            if (im) {
+                const ds = im.getAttribute('data-src');
+                if (ds && !/^https?:/.test(im.src)) im.src = ds;
+            }
+            w.style.cssText += ';display:inline-flex;vertical-align:middle;margin-left:3px;cursor:help';
+            w.title = HELP_TIP;
+            return w;
+        }
         const s = document.createElement('span');
         s.dataset.vmIcHelp = '1';
         s.textContent = '?';
-        s.title = 'Import charges: items shipped from outside the EU add ~3€ + VAT '
-            + 'per item at checkout (Temu policy). Temu may cover ~50% on orders '
-            + 'over 20€ (max 10€) for eligible orders.';
+        s.title = HELP_TIP;
         return s;
     }
 
@@ -241,7 +256,7 @@
                 amt.removeAttribute('aria-hidden');
                 amt.style.color = '#e02424';
                 amt.textContent = '+' + fmt(FEE);
-                wrap.append(sep, lbl2, ' ', amt, helpIcon());
+                wrap.append(sep, lbl2, ' ', amt, helpIcon(el));
                 lc.appendChild(wrap);
                 return;
             }
@@ -255,14 +270,14 @@
         const amt = document.createElement('b');
         amt.dataset.vmIcLine = '1';
         amt.textContent = `Import fees +${fmt(FEE)}`;
-        line.append(amt, ' ', helpIcon());
+        line.append(amt, ' ', helpIcon(el));
         rowEl.parentElement.insertBefore(line, rowEl.nextSibling);
     }
 
     function mark(el, kind) {
         el.dataset.vmIc = 'charged';
         el.dataset.vmIcKind = kind || 'row';
-        const host = iconHost(el);
+        const host = kind === 'card' ? el : iconHost(el);
         if (!host.querySelector('[data-vm-ic-corner]')) {
             // positioned children need a positioned parent — only set relative
             // on static elements so absolute/fixed layouts are never broken
@@ -384,7 +399,7 @@
             + ` (max ${COVER_MAX}€, if eligible) → ≈ ${fmt(subtotal + fees - covered)}`;
 
         if (row.getBoundingClientRect().height > 150) {
-            // ---- mini-cart sidebar: compact block under the subtotal ----
+            // ---- mini-cart sidebar: aligned summary rows under the subtotal ----
             let priceTop = amountBox;
             while (priceTop.parentElement && priceTop.parentElement !== row) {
                 priceTop = priceTop.parentElement;
@@ -393,18 +408,36 @@
             if (!line) {
                 line = document.createElement('div');
                 line.dataset.vmIcNote = '1';
-                line.style.cssText = 'display:block;font:600 12px/1.4 system-ui,sans-serif;'
-                    + 'color:#e02424;padding:3px 14px;box-sizing:border-box';
+                line.style.cssText = 'display:block;padding:4px 14px;box-sizing:border-box;'
+                    + 'font:400 12px/1.5 system-ui,sans-serif';
                 priceTop.parentElement.insertBefore(line, priceTop.nextSibling);
             }
             line.innerHTML = '';
-            const main = document.createElement('div');
-            main.textContent = fees
-                ? `Import fees (${n}): +${fmt(fees)} → Total: ${fmt(subtotal + fees)}`
-                : 'No import fees on selected items';
-            line.appendChild(main);
+            const mkRow = (l, v) => {
+                const d = document.createElement('div');
+                d.style.cssText = 'display:flex;justify-content:space-between;align-items:center';
+                const ls = document.createElement('span');
+                ls.textContent = l;
+                const vs = document.createElement('span');
+                vs.textContent = v;
+                vs.style.cssText = 'color:#e02424;font-weight:700;white-space:nowrap';
+                d.append(ls, vs);
+                return d;
+            };
+            if (fees) {
+                const r1 = mkRow(`Import fees (${n})`, `+${fmt(fees)}`);
+                r1.firstChild.style.color = '#e02424';
+                const r2 = mkRow('Total with fees', fmt(subtotal + fees));
+                r2.firstChild.style.color = '#e02424';
+                line.append(r1, r2);
+            } else {
+                const r = document.createElement('div');
+                r.style.color = '#0A8800';
+                r.textContent = 'No import fees on selected items';
+                line.appendChild(r);
+            }
             const cov = document.createElement('div');
-            cov.style.cssText = 'font:400 11px/1.3 system-ui,sans-serif;color:#777';
+            cov.style.cssText = 'font-size:11px;color:#777;margin-top:2px';
             cov.textContent = covered ? coverTxt
                 : `Orders >${COVER_MIN_ORDER}€: Temu covers ~50% of fees (max ${COVER_MAX}€)`;
             line.appendChild(cov);
