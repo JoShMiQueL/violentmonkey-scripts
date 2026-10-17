@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Temu: mark items with import charges
 // @namespace    https://github.com/JoShMiQueL/violentmonkey-scripts
-// @version      2.7
+// @version      2.8
 // @downloadURL  https://raw.githubusercontent.com/JoShMiQueL/violentmonkey-scripts/master/temu-hide-import-charges.user.js
 // @updateURL    https://raw.githubusercontent.com/JoShMiQueL/violentmonkey-scripts/master/temu-hide-import-charges.user.js
 // @description  On/off switch. When ON, items that ship from outside the EU get a corner warning triangle and their price line shows "price +3,63 → real total" (~3€/item + VAT, per Temu's policy). Cart/mini-cart totals include the fees and Temu's 50% coverage note. Nothing is hidden or removed.
@@ -192,30 +192,52 @@
 
     // Reuse Temu's own RRP "?" icon (Ek9HiUKH > img[alt=Details]) so our help
     // icon looks identical; falls back to a circled "?" when none exists.
+    // Hover shows a small popup styled like Temu's tooltips (native title is
+    // slow and ugly).
     const HELP_TIP = 'Import charges: items shipped from outside the EU add ~3€ '
         + '+ VAT per item at checkout (Temu policy). Temu may cover ~50% on '
         + 'orders over 20€ (max 10€) for eligible orders.';
+    function showTip(anchor) {
+        hideTip();
+        const tip = document.createElement('div');
+        tip.dataset.vmIcTip = '1';
+        tip.textContent = HELP_TIP;
+        tip.style.cssText = 'position:fixed;z-index:1000000;background:#fff;color:#333;'
+            + 'border:1px solid #e3e3e3;border-radius:8px;padding:8px 10px;'
+            + 'font:400 12px/1.45 system-ui,sans-serif;max-width:230px;'
+            + 'box-shadow:0 2px 12px rgba(0,0,0,.18);pointer-events:none';
+        document.body.appendChild(tip);
+        const r = anchor.getBoundingClientRect();
+        const w = tip.offsetWidth, h = tip.offsetHeight;
+        tip.style.left = Math.max(8, Math.min(r.left, innerWidth - w - 8)) + 'px';
+        tip.style.top = (r.bottom + 6 + h > innerHeight ? r.top - h - 6 : r.bottom + 6) + 'px';
+    }
+    function hideTip() {
+        const t = document.querySelector('[data-vm-ic-tip]');
+        if (t) t.remove();
+    }
     function helpIcon(scopeEl) {
         const tplImg = (scopeEl && scopeEl.querySelector('img[alt="Details"]'))
             || document.querySelector('img[alt="Details"]');
+        let w;
         if (tplImg && tplImg.parentElement) {
-            const w = tplImg.parentElement.cloneNode(true);
-            w.dataset.vmIcHelp = '1';
+            w = tplImg.parentElement.cloneNode(true);
             const im = w.querySelector('img');
             if (im) {
                 const ds = im.getAttribute('data-src');
                 if (ds && !/^https?:/.test(im.src)) im.src = ds;
             }
             w.style.cssText += ';display:inline-flex;vertical-align:middle;margin-left:3px;cursor:help';
-            w.title = HELP_TIP;
-            return w;
+        } else {
+            w = document.createElement('span');
+            w.textContent = '?';
         }
-        const s = document.createElement('span');
-        s.dataset.vmIcHelp = '1';
-        s.textContent = '?';
-        s.title = HELP_TIP;
-        return s;
+        w.dataset.vmIcHelp = '1';
+        w.addEventListener('mouseenter', () => showTip(w));
+        w.addEventListener('mouseleave', hideTip);
+        return w;
     }
+    addEventListener('scroll', hideTip, true);
 
     // Climb from a pure-price element while the parent only wraps that price:
     // the result is the whole price row.
@@ -227,19 +249,21 @@
         return n;
     }
 
-    // "Import fees 3,63€ ?" — appended to the RRP line when the card has one
-    // (cloning Temu's own classes), or as its own line under the price.
+    // "Import fees 3,63€ ?" — appended to the RRP row AFTER Temu's own "?"
+    // icon (so theirs stays with RRP and ours with our label), or as its own
+    // line under the price when no RRP row exists.
     function addFeesLine(el) {
         const rrpLeaf = [...el.querySelectorAll('*')]
             .find(n => n.children.length === 0 && /^\s*RRP\s*$/.test(n.textContent));
         if (rrpLeaf) {
-            let lc = rrpLeaf, pb = null;
-            for (let i = 0; i < 6 && lc.parentElement && lc !== el; i++) {
+            let lc = rrpLeaf, pb = null, rr = null;
+            for (let i = 0; i < 8 && lc.parentElement && lc !== el; i++) {
                 lc = lc.parentElement;
-                pb = priceBoxOf(lc);
-                if (pb) break;
+                if (!pb) pb = priceBoxOf(lc);
+                if (lc.querySelector('img[alt="Details"]')) rr = lc;
+                if (pb && rr) break;
             }
-            if (pb) {
+            if (rr && pb) {
                 const wrap = document.createElement('span');
                 wrap.dataset.vmIcLine = '1';
                 const sep = document.createElement('span');
@@ -257,7 +281,7 @@
                 amt.style.color = '#e02424';
                 amt.textContent = '+' + fmt(FEE);
                 wrap.append(sep, lbl2, ' ', amt, helpIcon(el));
-                lc.appendChild(wrap);
+                rr.appendChild(wrap);
                 return;
             }
         }
@@ -322,7 +346,7 @@
         for (const el of document.querySelectorAll('[data-vm-ic-amount]')) delete el.dataset.vmIcAmount;
         for (const b of document.querySelectorAll(
             '[data-vm-ic-corner], [data-vm-ic-glyph], [data-vm-ic-fee], [data-vm-ic-note],'
-            + ' [data-vm-ic-line], [data-vm-ic-feesrow]')) b.remove();
+            + ' [data-vm-ic-line], [data-vm-ic-feesrow], [data-vm-ic-tip]')) b.remove();
     }
 
     // ---- scanning -----------------------------------------------------------
