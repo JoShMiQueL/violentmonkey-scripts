@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         Temu: mark items with import charges
 // @namespace    https://github.com/JoShMiQueL/violentmonkey-scripts
-// @version      2.4
+// @version      2.5
 // @downloadURL  https://raw.githubusercontent.com/JoShMiQueL/violentmonkey-scripts/master/temu-hide-import-charges.user.js
 // @updateURL    https://raw.githubusercontent.com/JoShMiQueL/violentmonkey-scripts/master/temu-hide-import-charges.user.js
-// @description  On/off switch. When ON, marks every item that ships from outside the EU with a corner triangle + badge showing price with the import fee included (~3€/item + VAT, per Temu's policy). Cart shows the real total with fees. Listings, mini-cart, cart and checkout. Nothing is hidden or removed.
+// @description  On/off switch. When ON, items that ship from outside the EU get a corner warning triangle and their price line shows "price +3,63 → real total" (~3€/item + VAT, per Temu's policy). Cart/mini-cart totals include the fees and Temu's 50% coverage note. Nothing is hidden or removed.
 // @match        *://*.temu.com/*
 // @run-at       document-idle
 // @grant        GM_getValue
@@ -26,8 +26,9 @@
     const CHARGE_TEXT_RE = /has one import charge/i;
     const AMOUNT_RE = /(\d+[.,]\d+)\s*€/;
     const PRICE_RE = /€\s*(\d+[.,]\d+)|(\d+[.,]\d+)\s*€/;
-    const FEE = 3.63; // Temu policy: 3 EUR per different item + VAT (orders <= 150 EUR)
-    const DEFAULT_AMOUNT = '~3,63€';
+    const FEE = 3.63;            // 3 EUR per different item + VAT (orders <= 150 EUR)
+    const COVER_MIN_ORDER = 20;  // Temu covers 50% of fees on orders over 20 EUR...
+    const COVER_MAX = 10;        // ...up to 10 EUR (first eligible orders)
     const ENABLED_KEY = 'temuIcEnabled';
     const MAX_CLIMB = 20;
 
@@ -35,13 +36,12 @@
 
     const style = document.createElement('style');
     style.textContent = `
-        [data-vm-ic-corner]{position:absolute;top:0;right:0;width:0;height:0;z-index:9999;
+        [data-vm-ic-corner]{position:absolute;top:0;right:0;width:0;height:0;
             border-top:26px solid #e02424;border-left:26px solid transparent;pointer-events:none}
-        [data-vm-ic-glyph]{position:absolute;top:2px;right:3px;color:#fff;z-index:9999;
+        [data-vm-ic-glyph]{position:absolute;top:2px;right:3px;color:#fff;
             font:700 12px/1 system-ui,sans-serif;pointer-events:none}
-        [data-vm-ic-badge]{position:absolute;top:4px;left:4px;z-index:9999;pointer-events:none;
-            background:#e02424;color:#fff;font:600 11px/1.4 system-ui,sans-serif;
-            padding:2px 6px;border-radius:4px;box-shadow:0 1px 4px rgba(0,0,0,.35)}
+        [data-vm-ic-fee]{color:#e02424;font-weight:600;white-space:nowrap}
+        [data-vm-ic-note]{color:#e02424;font:600 12px/1.4 system-ui,sans-serif;margin-top:2px}
         #vmIcToggle{position:fixed;right:14px;bottom:14px;z-index:999999;cursor:pointer;
             border:0;border-radius:20px;padding:8px 14px;font:600 13px system-ui,sans-serif;
             color:#fff;box-shadow:0 2px 8px rgba(0,0,0,.35)}
@@ -78,7 +78,7 @@
     // ---- container detection ------------------------------------------------
 
     // Listing cards: climb from the product container while the parent wraps
-    // a single product (same structural rule as before).
+    // a single product.
     function cardOf(container) {
         let node = container;
         for (let i = 0; i < MAX_CLIMB && node !== document.body && node.parentElement; i++) {
@@ -109,56 +109,94 @@
 
     // ---- marking ------------------------------------------------------------
 
-    // Strip our own injected texts so price parsing never reads the badge
-    function cleanText(el) {
-        return el.textContent.replace(/\s+/g, ' ').replace(/Import fee [^€+]*€?/g, ' ');
-    }
-
     function fmt(n) { return n.toFixed(2).replace('.', ',') + '€'; }
 
-    function badgeTextOf(el) {
-        const txt = cleanText(el);
-        // Checkout accordion rows already carry the authoritative fee
-        const fee = txt.match(/import charge\D*(\d+[.,]\d+)\s*€/i);
-        if (fee) return 'Import fee ' + fee[1] + '€';
-        const p = txt.match(PRICE_RE);
-        if (p) {
-            const price = p[1] || p[2];
-            const n = parseFloat(price.replace(',', '.'));
-            if (!isNaN(n)) return price + '€ +3,63 → ' + fmt(n + FEE);
+    // Temu renders prices as split spans ("5" ",82" "€"), so find the deepest
+    // element whose WHOLE text is a single price. "RRP 7,01€" and fee rows
+    // never match (extra text).
+    const FULL_PRICE_RE = /^\s*€?\s*\d+[.,]\d+\s*€\s*$/;
+    function priceBoxOf(el) {
+        let box = null;
+        for (const n of el.querySelectorAll('*')) {
+            if (n.dataset && (n.dataset.vmIcFee || n.dataset.vmIcNote
+                || n.dataset.vmIcCorner || n.dataset.vmIcGlyph)) continue;
+            if (FULL_PRICE_RE.test(n.textContent.trim()) && (!box || box.contains(n))) box = n;
         }
-        return 'Import fee ' + DEFAULT_AMOUNT;
+        return box;
     }
 
-    function mark(el) {
-        if (el.dataset.vmIc === 'charged' && el.querySelector('[data-vm-ic-badge]')) return;
-        el.dataset.vmIc = 'charged';
-        // Badge is absolutely positioned: only set relative when the element is
-        // static — never override absolute/fixed positioning or the layout breaks.
-        if (getComputedStyle(el).position === 'static') {
-            el.dataset.vmIcRel = '1';
-            el.style.position = 'relative';
+    function parsePrice(txt) {
+        const m = txt.replace(/\s+/g, ' ').match(PRICE_RE);
+        if (!m) return null;
+        const n = parseFloat((m[1] || m[2]).replace(',', '.'));
+        return isNaN(n) ? null : n;
+    }
+
+    // The mini-cart sidebar obfuscates amounts: each digit is a vertical
+    // "reel" of 0-9 cells shifted by translateY(-N*100%) — N is the real
+    // digit. Literal chars (",", "€") sit in unshifted slots. Returns the
+    // decoded string ("17,34€") or null when no reels are present.
+    function decodeReelText(root) {
+        let out = '', reels = 0;
+        const done = new Set();
+        for (const el of root.querySelectorAll('*')) {
+            if (el.children.length > 0) continue;
+            if (el.dataset && (el.dataset.vmIcFee || el.dataset.vmIcNote)) continue;
+            const t = el.textContent.trim();
+            if (!/^[0-9,.€]$/.test(t)) continue;
+            const p = el.parentElement;
+            if (done.has(p)) continue;
+            const m = /translateY\(-([\d.]+)%\)/.exec(p.getAttribute('style') || '');
+            if (m && p.children.length >= 9) {
+                done.add(p);
+                reels++;
+                out += Math.round(parseFloat(m[1]) / 100);
+            } else out += t;
         }
-        const badge = document.createElement('span');
-        badge.dataset.vmIcBadge = '1';
-        badge.textContent = badgeTextOf(el);
-        badge.title = 'Ships from outside the EU — import charge applies at checkout';
-        const corner = document.createElement('span');
-        corner.dataset.vmIcCorner = '1';
-        const glyph = document.createElement('span');
-        glyph.dataset.vmIcGlyph = '1';
-        glyph.textContent = '!';
-        el.appendChild(badge);
-        el.appendChild(corner);
-        el.appendChild(glyph);
+        return reels ? out : null;
+    }
+
+    function mark(el, kind) {
+        el.dataset.vmIc = 'charged';
+        el.dataset.vmIcKind = kind || 'row';
+        if (!el.querySelector('[data-vm-ic-corner]')) {
+            // positioned children need a positioned parent — only set relative
+            // on static elements so absolute/fixed layouts are never broken
+            if (getComputedStyle(el).position === 'static') {
+                el.dataset.vmIcRel = '1';
+                el.style.position = 'relative';
+            }
+            const corner = document.createElement('span');
+            corner.dataset.vmIcCorner = '1';
+            const glyph = document.createElement('span');
+            glyph.dataset.vmIcGlyph = '1';
+            glyph.textContent = '!';
+            el.appendChild(corner);
+            el.appendChild(glyph);
+        }
+        // Price line: "5,82€ +3,63 → 9,45€" appended inline in red.
+        // Skipped on checkout accordion rows — they already carry the real fee.
+        if (!CHARGE_TEXT_RE.test(el.textContent) && !el.querySelector('[data-vm-ic-fee]')) {
+            const box = priceBoxOf(el);
+            const price = box ? parsePrice(box.textContent) : null;
+            if (box && price !== null) {
+                const fee = document.createElement('span');
+                fee.dataset.vmIcFee = '1';
+                fee.textContent = ` +3,63 → ${fmt(price + FEE)}`;
+                box.appendChild(fee);
+            }
+        }
     }
 
     function unmarkAll() {
         for (const el of document.querySelectorAll('[data-vm-ic]')) {
             delete el.dataset.vmIc;
+            delete el.dataset.vmIcKind;
             if (el.dataset.vmIcRel) { el.style.position = ''; delete el.dataset.vmIcRel; }
         }
-        for (const b of document.querySelectorAll('[data-vm-ic-badge], [data-vm-ic-corner], [data-vm-ic-glyph], [data-vm-ic-total]')) b.remove();
+        for (const el of document.querySelectorAll('[data-vm-ic-amount]')) delete el.dataset.vmIcAmount;
+        for (const b of document.querySelectorAll(
+            '[data-vm-ic-corner], [data-vm-ic-glyph], [data-vm-ic-fee], [data-vm-ic-note]')) b.remove();
     }
 
     // ---- scanning -----------------------------------------------------------
@@ -168,70 +206,91 @@
         // 1) listing cards (grid + carousels)
         for (const c of document.querySelectorAll(CONTAINER_SEL)) {
             const card = cardOf(c);
-            if (!card || card.dataset.vmIc === 'charged') continue;
-            if (classify(card) === 'charged') { mark(card); marked++; }
+            if (!card) continue;
+            if (card.dataset.vmIc === 'charged') { mark(card, 'card'); continue; } // heal wiped children
+            if (classify(card) === 'charged') { mark(card, 'card'); marked++; }
         }
         // 2) any product image outside a listing card (cart, mini-cart, checkout, PDP)
         for (const img of document.querySelectorAll('img')) {
-            if (img.closest('[data-vm-ic]') || img.closest(CONTAINER_SEL)) continue;
+            if (img.closest(CONTAINER_SEL)) continue;
             const u = img.currentSrc || img.src || img.getAttribute('data-src') || '';
             if (!PRODUCT_IMG_RE.test(u) || LOCAL_IMG_RE.test(u)) continue;
             const box = itemBoxOf(img);
-            if (box && classify(box) === 'charged') { mark(box); marked++; }
+            if (box && classify(box) === 'charged') {
+                if (box.dataset.vmIc !== 'charged') marked++;
+                mark(box, 'row'); // idempotent: heals children Temu re-rendered away
+            }
         }
-        // 3) checkout accordion rows (explicit fee text, authoritative amounts)
+        // 3) checkout accordion rows (explicit fee text)
         for (const el of document.querySelectorAll('div, li, span')) {
             if (el.children.length === 0 && CHARGE_TEXT_RE.test(el.textContent)) {
                 const box = itemBoxOf(el) || el.parentElement;
-                if (box && box.dataset.vmIc !== 'charged') { mark(box); marked++; }
+                if (box) {
+                    if (box.dataset.vmIc !== 'charged') marked++;
+                    mark(box, 'row');
+                }
             }
         }
         updateCartTotal();
         return marked;
     }
 
-    // Cart / mini-cart: show the real total including import fees (3,63 EUR
-    // per different charged item that is currently selected).
+    // Cart page + mini-cart sidebar: extend the Subtotal/Total line with the
+    // real total (fees of selected charged items) + Temu coverage note.
     function updateCartTotal() {
-        // label candidates, in preference order (cart page uses "Total",
-        // mini-cart sidebar uses "Subtotal")
-        const LABEL_RE = [/^\s*Total\s*$/i, /^\s*Subtotal\s*$/i, /^\s*Item\(s\) total:?/i];
-        let lbl = null;
-        for (const re of LABEL_RE) {
-            lbl = [...document.querySelectorAll('*')]
-                .find(e => e.children.length === 0 && re.test(e.textContent.trim()));
-            if (lbl) break;
-        }
+        const lbl = [...document.querySelectorAll('*')]
+            .find(e => e.children.length === 0 && /^\s*(Subtotal|Total)\s*$/i.test(e.textContent.trim()));
         if (!lbl) return;
-        let row = lbl;
-        for (let i = 0; i < 8 && row.parentElement && !PRICE_RE.test(row.parentElement.textContent); i++) {
+        // Lowest ancestor containing a pure-price element. In the mini-cart
+        // the label and the amount are siblings, so this can be the whole
+        // sidebar panel — don't bound by height.
+        let row = lbl, amountBox = null;
+        for (let i = 0; i < 10 && row.parentElement; i++) {
             row = row.parentElement;
+            amountBox = row.querySelector('[data-vm-ic-amount]') || priceBoxOf(row);
+            if (amountBox) break;
         }
-        if (!row.parentElement || !PRICE_RE.test(row.parentElement.textContent)) return;
-        row = row.parentElement;
-        const m = row.textContent.replace(/\s+/g, ' ').match(PRICE_RE);
-        if (!m) return;
-        const subtotal = parseFloat((m[1] || m[2]).replace(',', '.'));
-        if (isNaN(subtotal)) return;
+        if (!amountBox) return;
+        amountBox.dataset.vmIcAmount = '1';
+        const subtotal = parsePrice(decodeReelText(amountBox) || amountBox.textContent);
+        if (subtotal === null) return;
 
-        // charged item rows: aria-checked="true" is the real selection state
-        // (the aria-label is the click action, not the state)
-        const chargedRows = [...document.querySelectorAll('[data-vm-ic]')]
-            .filter(e => e.querySelector('[aria-checked]'));
-        const n = chargedRows.length
-            ? chargedRows.filter(e => e.querySelector('[aria-checked="true"]')).length
-            : document.querySelectorAll('[data-vm-ic]').length;
+        // Only cart/mini-cart item rows count for fees — never listing cards.
+        // aria-checked="true" is the real selection state; rows without a
+        // checkbox (mini-cart tiles) count as selected.
+        const rows = [...document.querySelectorAll('[data-vm-ic][data-vm-ic-kind="row"]')];
+        const n = rows.filter(e => {
+            const cb = e.querySelector('[aria-checked]');
+            return !cb || cb.getAttribute('aria-checked') === 'true';
+        }).length;
 
-        let div = row.parentElement.querySelector(':scope > [data-vm-ic-total]');
-        if (!div) {
-            div = document.createElement('div');
-            div.dataset.vmIcTotal = '1';
-            div.style.cssText = 'color:#e02424;font:600 12px/1.4 system-ui,sans-serif;margin-top:2px';
-            row.parentElement.insertBefore(div, row.nextSibling);
+        const fees = n * FEE;
+        const covered = subtotal > COVER_MIN_ORDER ? Math.min(fees * 0.5, COVER_MAX) : 0;
+
+        // Inline "+fees → total" right after the price element
+        let f = row.querySelector('[data-vm-ic-totalfee]');
+        if (!f) {
+            f = document.createElement('span');
+            f.dataset.vmIcTotalfee = '1';
+            f.dataset.vmIcFee = '1';
+            amountBox.parentElement.insertBefore(f, amountBox.nextSibling);
         }
-        div.textContent = n
-            ? `With import fees: ${fmt(subtotal + n * FEE)} (+${fmt(n * FEE)})`
-            : 'No import fees';
+        f.textContent = ` +${fmt(fees)} → ${fmt(subtotal + fees)}`;
+
+        // Coverage note under the subtotal line, inside the panel
+        let anchor = lbl;
+        while (anchor.parentElement && anchor.parentElement !== row) anchor = anchor.parentElement;
+        const host = anchor.parentElement === row ? anchor : row;
+        let note = row.parentElement.querySelector(':scope > [data-vm-ic-note]')
+            || row.querySelector(':scope > [data-vm-ic-note]');
+        if (!note) {
+            note = document.createElement('div');
+            note.dataset.vmIcNote = '1';
+            host.parentElement.insertBefore(note, host.nextSibling);
+        }
+        note.textContent = covered
+            ? `Temu covers ~50% of fees on orders >${COVER_MIN_ORDER}€ (max ${COVER_MAX}€, if eligible): you could pay ≈ ${fmt(subtotal + fees - covered)}`
+            : (fees ? `Import fees on ${n} selected item(s): +${fmt(fees)}` : 'No import fees on selected items');
     }
 
     let pending = false;
