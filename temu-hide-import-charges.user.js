@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         Temu: mark items with import charges
 // @namespace    https://github.com/JoShMiQueL/violentmonkey-scripts
-// @version      2.3
+// @version      2.4
 // @downloadURL  https://raw.githubusercontent.com/JoShMiQueL/violentmonkey-scripts/master/temu-hide-import-charges.user.js
 // @updateURL    https://raw.githubusercontent.com/JoShMiQueL/violentmonkey-scripts/master/temu-hide-import-charges.user.js
-// @description  On/off switch. When ON, marks every item that ships from outside the EU (import charge ~3€/item + VAT, per Temu's policy) with a red border + fee badge — listings, mini-cart, cart and checkout. Nothing is hidden or removed.
+// @description  On/off switch. When ON, marks every item that ships from outside the EU with a corner triangle + badge showing price with the import fee included (~3€/item + VAT, per Temu's policy). Cart shows the real total with fees. Listings, mini-cart, cart and checkout. Nothing is hidden or removed.
 // @match        *://*.temu.com/*
 // @run-at       document-idle
 // @grant        GM_getValue
@@ -25,6 +25,8 @@
     // Real charge text shown in the checkout accordion: "This 1 item has one import charge:3,63€"
     const CHARGE_TEXT_RE = /has one import charge/i;
     const AMOUNT_RE = /(\d+[.,]\d+)\s*€/;
+    const PRICE_RE = /€\s*(\d+[.,]\d+)|(\d+[.,]\d+)\s*€/;
+    const FEE = 3.63; // Temu policy: 3 EUR per different item + VAT (orders <= 150 EUR)
     const DEFAULT_AMOUNT = '~3,63€';
     const ENABLED_KEY = 'temuIcEnabled';
     const MAX_CLIMB = 20;
@@ -107,9 +109,25 @@
 
     // ---- marking ------------------------------------------------------------
 
-    function amountOf(el) {
-        const m = el.textContent.replace(/\s+/g, ' ').match(/import charge\D*(\d+[.,]\d+)\s*€/i);
-        return m ? m[1] + '€' : DEFAULT_AMOUNT;
+    // Strip our own injected texts so price parsing never reads the badge
+    function cleanText(el) {
+        return el.textContent.replace(/\s+/g, ' ').replace(/Import fee [^€+]*€?/g, ' ');
+    }
+
+    function fmt(n) { return n.toFixed(2).replace('.', ',') + '€'; }
+
+    function badgeTextOf(el) {
+        const txt = cleanText(el);
+        // Checkout accordion rows already carry the authoritative fee
+        const fee = txt.match(/import charge\D*(\d+[.,]\d+)\s*€/i);
+        if (fee) return 'Import fee ' + fee[1] + '€';
+        const p = txt.match(PRICE_RE);
+        if (p) {
+            const price = p[1] || p[2];
+            const n = parseFloat(price.replace(',', '.'));
+            if (!isNaN(n)) return price + '€ +3,63 → ' + fmt(n + FEE);
+        }
+        return 'Import fee ' + DEFAULT_AMOUNT;
     }
 
     function mark(el) {
@@ -123,7 +141,7 @@
         }
         const badge = document.createElement('span');
         badge.dataset.vmIcBadge = '1';
-        badge.textContent = 'Import fee ' + amountOf(el);
+        badge.textContent = badgeTextOf(el);
         badge.title = 'Ships from outside the EU — import charge applies at checkout';
         const corner = document.createElement('span');
         corner.dataset.vmIcCorner = '1';
@@ -140,7 +158,7 @@
             delete el.dataset.vmIc;
             if (el.dataset.vmIcRel) { el.style.position = ''; delete el.dataset.vmIcRel; }
         }
-        for (const b of document.querySelectorAll('[data-vm-ic-badge], [data-vm-ic-corner], [data-vm-ic-glyph]')) b.remove();
+        for (const b of document.querySelectorAll('[data-vm-ic-badge], [data-vm-ic-corner], [data-vm-ic-glyph], [data-vm-ic-total]')) b.remove();
     }
 
     // ---- scanning -----------------------------------------------------------
@@ -168,7 +186,52 @@
                 if (box && box.dataset.vmIc !== 'charged') { mark(box); marked++; }
             }
         }
+        updateCartTotal();
         return marked;
+    }
+
+    // Cart / mini-cart: show the real total including import fees (3,63 EUR
+    // per different charged item that is currently selected).
+    function updateCartTotal() {
+        // label candidates, in preference order (cart page uses "Total",
+        // mini-cart sidebar uses "Subtotal")
+        const LABEL_RE = [/^\s*Total\s*$/i, /^\s*Subtotal\s*$/i, /^\s*Item\(s\) total:?/i];
+        let lbl = null;
+        for (const re of LABEL_RE) {
+            lbl = [...document.querySelectorAll('*')]
+                .find(e => e.children.length === 0 && re.test(e.textContent.trim()));
+            if (lbl) break;
+        }
+        if (!lbl) return;
+        let row = lbl;
+        for (let i = 0; i < 8 && row.parentElement && !PRICE_RE.test(row.parentElement.textContent); i++) {
+            row = row.parentElement;
+        }
+        if (!row.parentElement || !PRICE_RE.test(row.parentElement.textContent)) return;
+        row = row.parentElement;
+        const m = row.textContent.replace(/\s+/g, ' ').match(PRICE_RE);
+        if (!m) return;
+        const subtotal = parseFloat((m[1] || m[2]).replace(',', '.'));
+        if (isNaN(subtotal)) return;
+
+        // charged item rows: aria-checked="true" is the real selection state
+        // (the aria-label is the click action, not the state)
+        const chargedRows = [...document.querySelectorAll('[data-vm-ic]')]
+            .filter(e => e.querySelector('[aria-checked]'));
+        const n = chargedRows.length
+            ? chargedRows.filter(e => e.querySelector('[aria-checked="true"]')).length
+            : document.querySelectorAll('[data-vm-ic]').length;
+
+        let div = row.parentElement.querySelector(':scope > [data-vm-ic-total]');
+        if (!div) {
+            div = document.createElement('div');
+            div.dataset.vmIcTotal = '1';
+            div.style.cssText = 'color:#e02424;font:600 12px/1.4 system-ui,sans-serif;margin-top:2px';
+            row.parentElement.insertBefore(div, row.nextSibling);
+        }
+        div.textContent = n
+            ? `With import fees: ${fmt(subtotal + n * FEE)} (+${fmt(n * FEE)})`
+            : 'No import fees';
     }
 
     let pending = false;
