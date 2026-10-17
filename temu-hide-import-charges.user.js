@@ -412,7 +412,7 @@
         line.dataset.vmIcLine = '1';
         line.style.cssText = 'font-size:12px;display:flex;align-items:baseline;'
             + 'column-gap:4px;margin-top:1px';
-        const amt = document.createElement('b');
+        const amt = document.createElement('span');
         amt.dataset.vmIcLine = '1';
         amt.textContent = `Import fees +${fmt(FEE)}`;
         const icon = helpIcon(el);
