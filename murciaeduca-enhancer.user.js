@@ -1,7 +1,9 @@
 // ==UserScript==
-// @name         Moodle: estado de entregas
-// @namespace    https://github.com/vm-userscripts
-// @version      1.3
+// @name         MurciaEduca Aula Virtual: enhancer
+// @namespace    https://github.com/JoShMiQueL/violentmonkey-scripts
+// @version      1.3.1
+// @downloadURL  https://raw.githubusercontent.com/JoShMiQueL/violentmonkey-scripts/master/murciaeduca-enhancer.user.js
+// @updateURL    https://raw.githubusercontent.com/JoShMiQueL/violentmonkey-scripts/master/murciaeduca-enhancer.user.js
 // @description  Muestra junto a cada tarea del curso si ha sido entregada (con resumen flotante) y en "Mis cursos" los totales, el profesor y la próxima entrega por curso.
 // @match        https://aulavirtual.murciaeduca.es/course/view.php*
 // @match        https://aulavirtual.murciaeduca.es/my/*

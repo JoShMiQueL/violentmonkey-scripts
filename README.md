@@ -5,19 +5,20 @@ Colección de userscripts para Violentmonkey / Tampermonkey.
 ## Instalación
 
 1. Instala [Violentmonkey](https://violentmonkey.github.io/) en Chrome/Firefox.
-2. Abre el archivo `.user.js` deseado desde el explorador (o arrástralo al navegador).
-3. Violentmonkey detectará el script y ofrecerá instalarlo.
+2. Abre la URL raw del `.user.js` deseado en GitHub — Violentmonkey ofrecerá instalarlo.
+3. Las actualizaciones llegan solas: cada script lleva `@updateURL`/`@downloadURL` apuntando a este repo.
 
 ## Scripts incluidos
 
 | Script | Qué hace | Sitio |
 |--------|----------|-------|
-| `moodle-assign-status.user.js` | Muestra si cada tarea está entregada (badge ✓/✗), resumen flotante en el curso, y en "Mis cursos" totales por curso + profesor + próxima entrega | `aulavirtual.murciaeduca.es` |
+| `murciaeduca-enhancer.user.js` | Enhancer del aula virtual: badge ✓/✗ de entrega por tarea, resumen flotante en el curso, y en "Mis cursos" totales por curso + profesor + próxima entrega | `aulavirtual.murciaeduca.es` |
+| `temu-hide-import-charges.user.js` | Elimina de los listados los artículos con cargo de importación (fila "RRP €X.XX"), incluidos los carruseles/ads. Nunca actúa en carrito ni checkout | `*.temu.com` |
 
 ## Añadir un script nuevo
 
 1. Crea el archivo `nombre.user.js` con el bloque de metadatos `// ==UserScript==` … `// ==/UserScript==`.
-2. `@match` define en qué URLs corre.
+2. `@match` define en qué URLs corre; añade `@updateURL`/`@downloadURL` al raw del repo.
 3. Prueba en la consola del navegador antes de instalar.
 
 ## Notas
