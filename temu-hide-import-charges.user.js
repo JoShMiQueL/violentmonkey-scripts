@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Temu: mark items with import charges
 // @namespace    https://github.com/JoShMiQueL/violentmonkey-scripts
-// @version      2.1
+// @version      2.2
 // @downloadURL  https://raw.githubusercontent.com/JoShMiQueL/violentmonkey-scripts/master/temu-hide-import-charges.user.js
 // @updateURL    https://raw.githubusercontent.com/JoShMiQueL/violentmonkey-scripts/master/temu-hide-import-charges.user.js
 // @description  On/off switch. When ON, marks every item that ships from outside the EU (import charge ~3€/item + VAT, per Temu's policy) with a red border + fee badge — listings, mini-cart, cart and checkout. Nothing is hidden or removed.
@@ -33,7 +33,8 @@
 
     const style = document.createElement('style');
     style.textContent = `
-        [data-vm-ic="charged"]{box-shadow:0 2px 0 0 #e02424!important}
+        [data-vm-ic-bar]{position:absolute;left:8px;right:8px;bottom:-2px;height:2px;
+            background:#e02424;z-index:9999;pointer-events:none;border-radius:1px}
         [data-vm-ic-badge]{position:absolute;top:4px;left:4px;z-index:9999;pointer-events:none;
             background:#e02424;color:#fff;font:600 11px/1.4 system-ui,sans-serif;
             padding:2px 6px;border-radius:4px;box-shadow:0 1px 4px rgba(0,0,0,.35)}
@@ -122,7 +123,10 @@
         badge.dataset.vmIcBadge = '1';
         badge.textContent = 'Import fee ' + amountOf(el);
         badge.title = 'Ships from outside the EU — import charge applies at checkout';
+        const bar = document.createElement('span');
+        bar.dataset.vmIcBar = '1';
         el.appendChild(badge);
+        el.appendChild(bar);
     }
 
     function unmarkAll() {
@@ -130,7 +134,7 @@
             delete el.dataset.vmIc;
             if (el.dataset.vmIcRel) { el.style.position = ''; delete el.dataset.vmIcRel; }
         }
-        for (const b of document.querySelectorAll('[data-vm-ic-badge]')) b.remove();
+        for (const b of document.querySelectorAll('[data-vm-ic-badge], [data-vm-ic-bar]')) b.remove();
     }
 
     // ---- scanning -----------------------------------------------------------
