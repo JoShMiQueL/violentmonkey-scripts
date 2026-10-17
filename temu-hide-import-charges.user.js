@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Temu: mark items with import charges
 // @namespace    https://github.com/JoShMiQueL/violentmonkey-scripts
-// @version      2.0
+// @version      2.1
 // @downloadURL  https://raw.githubusercontent.com/JoShMiQueL/violentmonkey-scripts/master/temu-hide-import-charges.user.js
 // @updateURL    https://raw.githubusercontent.com/JoShMiQueL/violentmonkey-scripts/master/temu-hide-import-charges.user.js
 // @description  On/off switch. When ON, marks every item that ships from outside the EU (import charge ~3€/item + VAT, per Temu's policy) with a red border + fee badge — listings, mini-cart, cart and checkout. Nothing is hidden or removed.
@@ -33,7 +33,7 @@
 
     const style = document.createElement('style');
     style.textContent = `
-        [data-vm-ic="charged"]{outline:2px solid #e02424!important;outline-offset:-2px}
+        [data-vm-ic="charged"]{box-shadow:0 2px 0 0 #e02424!important}
         [data-vm-ic-badge]{position:absolute;top:4px;left:4px;z-index:9999;pointer-events:none;
             background:#e02424;color:#fff;font:600 11px/1.4 system-ui,sans-serif;
             padding:2px 6px;border-radius:4px;box-shadow:0 1px 4px rgba(0,0,0,.35)}
