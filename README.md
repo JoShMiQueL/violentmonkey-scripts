@@ -14,6 +14,7 @@ Colección de userscripts para Violentmonkey / Tampermonkey.
 |--------|----------|-------|
 | `murciaeduca-enhancer.user.js` | Enhancer del aula virtual: badge ✓/✗ de entrega por tarea, resumen flotante en el curso, y en "Mis cursos" totales por curso + profesor + próxima entrega | `aulavirtual.murciaeduca.es` |
 | `temu-hide-import-charges.user.js` | Switch ON/OFF (píldora flotante + menú VM). Cuando está activo marca cada artículo enviado desde fuera de la UE con un triángulo rojo abajo-derecha de la tarjeta (en carrito/minicart, sobre la miniatura para no tapar botones), precio inline `precio +3,63€ → total`, y línea `Import fees +3,63€ ?` con el icono nativo de ayuda de Temu (en la línea del RRP si existe; si no, línea propia). El carrito añade una fila nativa `Import fees (n): +X` antes del Total + nota de cobertura (50% en pedidos >20€, máx 10€); el mini-carrito muestra filas alineadas de fees y total. Detecta el origen por el CDN de la imagen (`img-eu.kwcdn.com`/`local-goods-img` = almacén local, sin cargo) y decodifica el subtotal ofuscado del sidebar. Nunca oculta ni elimina nada | `*.temu.com` |
+| `youtube-real-time-helper.user.js` | Extiende el timer del reproductor de YouTube con el tiempo real que queda a la velocidad actual, lo que ahorras (o añades) frente a 1x con su porcentaje, el contenido restante y la hora estimada de fin. Va dentro de la propia barra de tiempo de YouTube, se adapta al ancho disponible (descarta segmentos en lugar de recortarlos) y se oculta durante anuncios y directos | `youtube.com` |
 
 ## Añadir un script nuevo
 
