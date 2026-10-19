@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Real Time, Savings & ETA
 // @namespace    local.userscript.youtube.real-time
-// @version      2.0.1
+// @version      2.0.2
 // @downloadURL  https://raw.githubusercontent.com/JoShMiQueL/violentmonkey-scripts/master/youtube-real-time-helper.user.js
 // @updateURL    https://raw.githubusercontent.com/JoShMiQueL/violentmonkey-scripts/master/youtube-real-time-helper.user.js
 // @description  Extends YouTube's own control-bar time display with the real time remaining at the current speed, time saved versus 1x, and an estimated finish time. English UI, no emojis, hides with the control bar.
@@ -16,7 +16,7 @@
 (() => {
   "use strict";
 
-  const VERSION = "2.0.1";
+  const VERSION = "2.0.2";
 
   /**
    * Tunable behaviour of the script.
@@ -25,6 +25,8 @@
     REFRESH_INTERVAL_MS: 250,
     WIDTH_REFRESH_INTERVAL_MS: 500,
     WIDTH_SAFETY_MARGIN_PX: 12,
+    // false renders the estimated end as 21:05, true as 9:05 PM.
+    HOUR_24: true,
     DEBUG: false,
     SHOW_BOOT_MARKER: false,
   });
@@ -88,9 +90,12 @@
     maximumFractionDigits: 2,
   });
 
+  // `hourCycle` rather than `hour12`, so the 24h mode cannot leak the
+  // "24:00" that some engines render for midnight with `hour12: false`.
   const endTimeFormatter = new Intl.DateTimeFormat(undefined, {
     hour: "numeric",
     minute: "2-digit",
+    hourCycle: SETTINGS.HOUR_24 ? "h23" : "h12",
   });
 
   let inline = null;
@@ -109,8 +114,15 @@
   let lastVisibility = null;
   let lastPointerEvents = null;
   let lastColor = null;
-  let lastSignature = null;
-  let lastTooltip = null;
+  let lastSignature = "";
+  let lastKinds = "";
+  let segmentTextNodes = [];
+  // The native tooltip is dismissed and re-queued whenever its `title`
+  // changes while visible, so the tooltip is frozen while the pointer rests
+  // on our span and refreshed on the way out.
+  let pointerInside = false;
+  let desiredTooltip = "";
+  let appliedTooltip = null;
   let lastHiddenReasonLogged = "init";
   let lastErrorMessage = "";
   let renderedOnce = false;
@@ -279,10 +291,32 @@
   // Inline display lifecycle
   // ---------------------------------------------------------------------------
 
+  function handlePointerEnter() {
+    pointerInside = true;
+  }
+
+  // Refreshes the tooltip only once the pointer is gone, so the native
+  // tooltip that is currently on screen is never dismissed by our own write.
+  function handlePointerLeave() {
+    pointerInside = false;
+    if (desiredTooltip !== appliedTooltip) {
+      applyTooltip(desiredTooltip);
+    }
+  }
+
+  function applyTooltip(tooltip) {
+    if (!inline) return;
+    inline.title = tooltip;
+    inline.setAttribute("aria-label", tooltip);
+    appliedTooltip = tooltip;
+  }
+
   function createInline() {
     const element = document.createElement("span");
     element.id = INLINE_ID;
     element.setAttribute("aria-live", "off");
+    element.addEventListener("mouseenter", handlePointerEnter);
+    element.addEventListener("mouseleave", handlePointerLeave);
     applyInlineStyles(element);
     return element;
   }
@@ -351,8 +385,9 @@
     // Re-anchored (or injected for the first time): force a full re-render.
     lastVisibility = null;
     lastColor = null;
-    lastSignature = null;
-    lastTooltip = null;
+    lastSignature = "";
+    segmentTextNodes = [];
+    appliedTooltip = null;
     budgetDirty = true;
     cleanupOldElements();
 
@@ -369,6 +404,48 @@
     return inline;
   }
 
+  // Rebuilds the segment nodes only when their shape (the sequence of kinds)
+  // changes. The usual case is the same shape with a new value, and that is
+  // written into the existing text node via `.data` (a characterData
+  // mutation), so nothing is removed from under the pointer and the native
+  // tooltip is not dismissed. Replacing `textContent` here would delete and
+  // recreate the text nodes every tick, which is what made the tooltip
+  // restart on every update.
+  function renderSegments(parts) {
+    const shape = parts.map((part) => part.kind).join("|");
+
+    if (shape !== lastSignature) {
+      inline.textContent = "";
+      segmentTextNodes = [];
+
+      for (let index = 0; index < parts.length; index += 1) {
+        if (index > 0) {
+          inline.appendChild(document.createTextNode(SEGMENT_SEPARATOR));
+        }
+
+        const span = document.createElement("span");
+        if (parts[index].kind === "speed") {
+          setImportantStyle(span, "font-weight", "700");
+        }
+
+        const textNode = document.createTextNode(parts[index].text);
+        segmentTextNodes.push(textNode);
+        span.appendChild(textNode);
+        inline.appendChild(span);
+      }
+
+      lastSignature = shape;
+      return;
+    }
+
+    for (let index = 0; index < parts.length; index += 1) {
+      const textNode = segmentTextNodes[index];
+      if (!textNode) continue;
+      const text = parts[index].text;
+      if (textNode.data !== text) textNode.data = text;
+    }
+  }
+
   function renderInline(parts, mode, tooltip) {
     if (!inline) return;
 
@@ -383,37 +460,24 @@
       lastVisibility = true;
     }
 
-    const signature = parts
-      .map((part) => `${part.kind}:${part.text}`)
-      .join("|");
+    renderSegments(parts);
 
-    if (signature !== lastSignature) {
-      inline.textContent = "";
+    // Remember the newest text, but only write it once the pointer has left:
+    // changing `title` while the native tooltip is on screen closes it and
+    // restarts the hover delay, which reads as the tooltip resetting every
+    // second.
+    desiredTooltip = tooltip;
 
-      for (let index = 0; index < parts.length; index += 1) {
-        if (index > 0) {
-          inline.appendChild(document.createTextNode(SEGMENT_SEPARATOR));
-        }
-
-        const span = document.createElement("span");
-        span.textContent = parts[index].text;
-        if (parts[index].kind === "speed") {
-          setImportantStyle(span, "font-weight", "700");
-        }
-        inline.appendChild(span);
-      }
-
-      lastSignature = signature;
-    }
-
-    if (tooltip !== lastTooltip) {
-      inline.title = tooltip;
-      inline.setAttribute("aria-label", tooltip);
-      lastTooltip = tooltip;
+    if (!pointerInside && desiredTooltip !== appliedTooltip) {
+      applyTooltip(desiredTooltip);
     }
   }
 
   function hideInline() {
+    // Hidden while hovered: the pointer is no longer over anything, so drop
+    // the frozen state too or the tooltip would stay stale forever.
+    pointerInside = false;
+
     if (!inline || lastVisibility === false) return;
     setImportantStyle(inline, "display", "none");
     lastVisibility = false;
