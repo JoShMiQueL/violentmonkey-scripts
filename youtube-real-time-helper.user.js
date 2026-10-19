@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Real Time, Savings & ETA
 // @namespace    local.userscript.youtube.real-time
-// @version      2.0.0
+// @version      2.0.1
 // @downloadURL  https://raw.githubusercontent.com/JoShMiQueL/violentmonkey-scripts/master/youtube-real-time-helper.user.js
 // @updateURL    https://raw.githubusercontent.com/JoShMiQueL/violentmonkey-scripts/master/youtube-real-time-helper.user.js
 // @description  Extends YouTube's own control-bar time display with the real time remaining at the current speed, time saved versus 1x, and an estimated finish time. English UI, no emojis, hides with the control bar.
@@ -16,7 +16,7 @@
 (() => {
   "use strict";
 
-  const VERSION = "2.0.0";
+  const VERSION = "2.0.1";
 
   /**
    * Tunable behaviour of the script.
@@ -25,8 +25,8 @@
     REFRESH_INTERVAL_MS: 250,
     WIDTH_REFRESH_INTERVAL_MS: 500,
     WIDTH_SAFETY_MARGIN_PX: 12,
-    DEBUG: true,
-    SHOW_BOOT_MARKER: true,
+    DEBUG: false,
+    SHOW_BOOT_MARKER: false,
   });
 
   const INLINE_ID = "ytrt-inline-v2";
@@ -66,7 +66,6 @@
     "speed",
     "real",
     "savedPct",
-    "content",
     "end",
   ]);
 
@@ -76,7 +75,6 @@
     "savedPct",
     "speed",
     "end",
-    "content",
   ]);
 
   const ACCENTS = Object.freeze({
@@ -225,6 +223,30 @@
     } catch (_) {
       return fallback;
     }
+  }
+
+  // The <video> element wins over player.getPlaybackRate() whenever it
+  // actually has media loaded: speed-controller extensions write
+  // `video.playbackRate` directly, and YouTube's API keeps reporting what
+  // YouTube intends, so trusting it hides those changes. The API stays the
+  // fallback for a freshly recreated element (readyState 0 / NaN duration)
+  // where YouTube still intends the previous rate; last resort is the
+  // element's own rate, then 1.
+  function resolvePlaybackRate(player, video) {
+    const elementRate = video ? video.playbackRate : NaN;
+    const elementValid = Number.isFinite(elementRate) && elementRate > 0;
+    const mediaLoaded =
+      Boolean(video) &&
+      video.readyState > 0 &&
+      Number.isFinite(video.duration) &&
+      video.duration > 0;
+
+    if (mediaLoaded && elementValid) return elementRate;
+
+    const apiRate = readPlayerNumber(player, "getPlaybackRate", NaN);
+    if (Number.isFinite(apiRate) && apiRate > 0) return apiRate;
+
+    return elementValid ? elementRate : 1;
   }
 
   function getVideoTitle(player) {
@@ -607,19 +629,15 @@
     const estimates = state.estimates;
     const atoms = {
       speed: formatPlaybackSpeed(state.rate),
-      real: `Real ${formatClock(estimates.realRemaining)}`,
+      real: `Done in ${formatClock(estimates.realRemaining)}`,
       savedPct: null,
-      content: null,
       end: `End ${endTimeFormatter.format(new Date(lastEndTimestamp))}`,
     };
 
-    if (!state.nearOne) {
-      if (Math.abs(estimates.savingFromHere) >= 1) {
-        atoms.savedPct =
-          `${savingsLabel(estimates.savingFromHere)} ` +
-          `(${Math.round(estimates.savingPercent)}%)`;
-      }
-      atoms.content = `Content ${formatClock(estimates.remainingContent)}`;
+    if (!state.nearOne && Math.abs(estimates.savingFromHere) >= 1) {
+      atoms.savedPct =
+        `${savingsLabel(estimates.savingFromHere)} ` +
+        `(${Math.round(estimates.savingPercent)}%)`;
     }
 
     return atoms;
@@ -634,7 +652,7 @@
       `Speed: ${formatPlaybackSpeed(state.rate)}`,
       `State: ${state.paused ? "Paused" : "Playing"}`,
       `Content remaining: ${formatClock(estimates.remainingContent)}`,
-      `Real time remaining: ${formatClock(estimates.realRemaining)}`,
+      `Done in: ${formatClock(estimates.realRemaining)}`,
       (
         `Savings from here: ${describeSavings(estimates.savingFromHere)} ` +
         `(${Math.round(estimates.savingPercent)}% of the remaining content)`
@@ -727,9 +745,7 @@
 
     state.paused = Boolean(video.paused);
 
-    let rate = readPlayerNumber(player, "getPlaybackRate", video.playbackRate);
-    if (!Number.isFinite(rate) || rate <= 0) rate = 1;
-    state.rate = rate;
+    state.rate = resolvePlaybackRate(player, video);
 
     let playerDuration = NaN;
     try {
@@ -770,9 +786,13 @@
       return state;
     }
 
-    state.estimates = computeEstimates(state.duration, state.currentTime, rate);
-    state.nearOne = Math.abs(rate - 1) < 0.001;
-    state.mode = state.nearOne ? "normal" : rate > 1 ? "faster" : "slower";
+    state.estimates = computeEstimates(
+      state.duration,
+      state.currentTime,
+      state.rate
+    );
+    state.nearOne = Math.abs(state.rate - 1) < 0.001;
+    state.mode = state.nearOne ? "normal" : state.rate > 1 ? "faster" : "slower";
     return state;
   }
 
