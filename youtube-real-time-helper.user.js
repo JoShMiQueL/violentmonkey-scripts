@@ -115,7 +115,6 @@
   let lastPointerEvents = null;
   let lastColor = null;
   let lastSignature = "";
-  let lastKinds = "";
   let segmentTextNodes = [];
   // The native tooltip is dismissed and re-queued whenever its `title`
   // changes while visible, so the tooltip is frozen while the pointer rests
